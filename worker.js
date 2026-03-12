@@ -410,7 +410,6 @@ const HOMEPAGE_HTML = `
 </html>
 `;
 
-// 1.js 辅助函数开始 =================================
 async function handleToken(realm, service, scope) {
   const tokenUrl = `${realm}?service=${service}&scope=${scope}`;
   console.log(`Fetching token from: ${tokenUrl}`);
@@ -459,7 +458,6 @@ function getEmptyBodySHA256() {
   return 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 }
 
-// 1.js 主处理函数
 async function handleRequest1js(request, redirectCount = 0) {
   const MAX_REDIRECTS = 5; // 最大重定向次数
   const url = new URL(request.url);
@@ -730,7 +728,6 @@ async function handleRequest1js(request, redirectCount = 0) {
     return new Response(`Error fetching from ${targetDomain}: ${error.message}\n`, { status: 500 });
   }
 }
-// 1.js 辅助函数结束 =================================
 
 
 // 由白名单自动生成映射
@@ -753,14 +750,12 @@ async function handleRequest(request) {
   const host_header = request.headers.get('Host');
   const effective_host = (host_header || current_host).toLowerCase();
   
-  // 检查是否是 1.js 相关的请求（首页或加速下载请求）
-  // 如果不是以 -github. 开头的域名，或者路径是加速下载相关路径，则使用 1.js 的功能
   const host_prefix = getProxyPrefix(effective_host);
   if (!host_prefix || url.pathname.startsWith('/https://') || url.pathname.startsWith('/v2/')) {
     return handleRequest1js(request);
   }
   
-  // 对于 -github. 后缀的域名，即使路径是根路径，也应该进入 GitHub 网站
+  // 对于 -proxy. 后缀的域名，即使路径是根路径，也应该进入 GitHub 网站
   
   // 检查特殊路径，返回正常错误
   if (redirect_paths.includes(url.pathname)) {
@@ -776,9 +771,9 @@ async function handleRequest(request) {
   // 根据前缀找到对应的原始域名
   let target_host = null;
   
-  // 解析 *-github. 模式
-  if (host_prefix && host_prefix.endsWith('-github.')) {
-    const prefix_part = host_prefix.slice(0, -8); // 移除 -github.
+  // 解析 *-proxy. 模式
+  if (host_prefix && host_prefix.endsWith('-proxy.')) {
+    const prefix_part = host_prefix.slice(0, -7); // 移除 -proxy.
     // 尝试找到对应的原始域名
     for (const original of Object.keys(domain_mappings)) {
       const normalized_original = original.trim().toLowerCase();
@@ -848,8 +843,8 @@ async function handleRequest(request) {
 
 // 获取当前主机名的前缀，用于匹配反向映射
 function getProxyPrefix(host) {
-  // 检查 *-github. 模式
-  const ghMatch = host.match(/^([a-z0-9-]+-github\.)/);
+  // 检查 *-proxy. 模式
+  const ghMatch = host.match(/^([a-z0-9-]+-proxy\.)/);
   if (ghMatch) {
     return ghMatch[1];
   }
@@ -874,8 +869,7 @@ async function modifyResponse(response, host_prefix, effective_hostname) {
   for (const [original_domain, mapped_prefix] of Object.entries(domain_mappings)) {
     const escaped_domain = original_domain.replace(/\./g, '\\.');
     
-    // 统一为 [原生域名]-github.072103.xyz
-    const current_prefix = mapped_prefix + '-github.';
+    const current_prefix = mapped_prefix + '-proxy.';
     const full_proxy_domain = `${current_prefix}${domain_suffix}`;
     
     // 替换完整URLs
@@ -891,25 +885,6 @@ async function modifyResponse(response, host_prefix, effective_hostname) {
     );
   }
 
-  // 处理相对路径，使用有效主机名
-  // 所有模式下都生效
-  // 注意：这个替换可能会导致问题，因为它会匹配所有以 / 开头的路径
-  // 许多 JS/CSS 引用可能是相对路径，但也可能是根路径
-  // 如果这里强制替换为绝对路径，可能会导致 URL 拼接错误
-  // 例如：如果原文本是 "/assets/foo.js"，它会被替换为 "https://github-githubassets-com-gh.xxx.com/assets/foo.js"
-  // 如果原文本已经是 "https://github-githubassets-com-gh.xxx.com/assets/foo.js" (被上面的循环替换了)，这里不会再匹配（因为前面的 http... 不符合 (?<=["'])）
-  // 但是，如果原文本是相对路径，如 "/assets/foo.js"，并且当前页面已经是代理页面
-  // 浏览器会自动将其解析为当前域名下的路径，通常不需要我们手动替换
-  // 手动替换反而可能导致像 `https://domain.com/assetshttps://domain.com/foo.js` 这种奇怪的 URL
-  // 除非是为了处理某些特定的动态加载脚本，否则应该谨慎使用
-  
-  // 暂时注释掉这段代码，看看是否解决 "URL 拼接" 问题
-  /*
-  text = text.replace(
-    /(?<=["'])\/(?!\/|[a-zA-Z]+:)/g,
-    `https://${effective_hostname}/`
-  );
-  */
 
   return text;
 }
