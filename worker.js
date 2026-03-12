@@ -20,6 +20,50 @@ const domain_whitelist = [
   'github.community'
 ];
 
+// KV空间绑定（需要在Cloudflare Worker设置中配置）
+// 绑定名称：Proxy
+
+// 从KV获取域名白名单
+async function getDomainWhitelist() {
+  try {
+    // 检查KV空间是否存在
+    if (typeof Proxy !== 'undefined') {
+      const whitelist = await Proxy.get('domain_whitelist');
+      if (whitelist) {
+        return JSON.parse(whitelist);
+      }
+    }
+  } catch (error) {
+    console.error('Error getting domain whitelist from KV:', error);
+  }
+  // 默认白名单作为回退
+  return domain_whitelist;
+}
+
+// 保存域名白名单到KV
+async function saveDomainWhitelist(whitelist) {
+  try {
+    if (typeof Proxy !== 'undefined') {
+      await Proxy.put('domain_whitelist', JSON.stringify(whitelist));
+      // 更新内存中的domain_whitelist变量
+      domain_whitelist.length = 0;
+      whitelist.forEach(domain => domain_whitelist.push(domain));
+      return true;
+    }
+  } catch (error) {
+    console.error('Error saving domain whitelist to KV:', error);
+  }
+  return false;
+}
+
+// 由白名单自动生成映射
+async function getDomainMappings() {
+  const whitelist = await getDomainWhitelist();
+  return Object.fromEntries(
+    whitelist.map(domain => [domain, domain.replace(/\./g, '-')])
+  );
+}
+
 // ALLOWED_HOSTS: 定义允许代理的域名列表（默认白名单）。
 const ALLOWED_HOSTS = [
   'quay.io',
@@ -52,6 +96,85 @@ const LIGHTNING_SVG = `
   <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
 </svg>`;
 
+// 管理员页面 HTML
+const ADMIN_PAGE_HTML = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理员页面 - 域名白名单管理</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      min-height: 100vh;
+      background: linear-gradient(to bottom right, #e6f0ff, #f0f8ff);
+      color: #1a365d;
+    }
+    .container {
+      max-width: 1000px;
+    }
+    .card {
+      background: white;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px rgba(59, 130, 246, 0.15);
+      border: 1px solid #dbeafe;
+    }
+    .table-responsive {
+      overflow-x: auto;
+    }
+    .domain-item {
+      transition: all 0.2s;
+    }
+    .domain-item:hover {
+      background-color: #ebf8ff;
+    }
+    h1, h2, h3 {
+      color: #1a365d;
+    }
+    .bg-blue-500 {
+      background-color: #3182ce;
+    }
+    .bg-blue-500:hover {
+      background-color: #2b6cb0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container mx-auto px-4 py-8">
+    <h1 class="text-3xl font-bold mb-6 text-center text-gray-800">ZQ-Proxy 管理员</h1>
+    
+    <!-- 添加域名表单 -->
+    <div class="card p-6 mb-6">
+      <h2 class="text-xl font-semibold mb-4 text-gray-700">添加新域名</h2>
+      <form method="POST" class="flex flex-col sm:flex-row gap-3">
+        <input type="text" name="domain" placeholder="输入域名（例如：github.com）" 
+               class="flex-grow p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <input type="hidden" name="action" value="add">
+        <button type="submit" class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
+          添加域名
+        </button>
+      </form>
+    </div>
+    
+    <!-- 域名管理 -->
+    <div class="card p-6">
+      <h2 class="text-xl font-semibold mb-4 text-gray-700">域名管理</h2>
+      
+      <!-- 当前白名单域名 -->
+      <div>
+        <h3 class="text-lg font-medium mb-3 text-gray-600">当前白名单域名</h3>
+        <div class="space-y-2">
+          {{domains_list}}
+        </div>
+      </div>
+    </div>
+    
+  </div>
+</body>
+</html>
+`;
+
 // 首页 HTML
 const HOMEPAGE_HTML = `
 <!DOCTYPE html>
@@ -59,7 +182,7 @@ const HOMEPAGE_HTML = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cloudflare 加速</title>
+  <title>ZQ-Proxy</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(LIGHTNING_SVG)}">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -73,37 +196,39 @@ const HOMEPAGE_HTML = `
       padding: 1rem;
     }
     .light-mode {
-      background: linear-gradient(to bottom right, #f1f5f9, #e2e8f0);
-      color: #111827;
+      background: linear-gradient(to bottom right, #e6f0ff, #f0f8ff);
+      color: #1a365d;
     }
     .dark-mode {
-      background: linear-gradient(to bottom right, #1f2937, #374151);
-      color: #e5e7eb;
+      background: linear-gradient(to bottom right, #1a365d, #2a4365);
+      color: #e2e8f0;
     }
     .container {
       width: 100%;
       max-width: 800px;
       padding: 1.5rem;
       border-radius: 0.75rem;
-      border: 1px solid #e5e7eb;
-      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+      border: 1px solid #bfdbfe;
+      box-shadow: 0 8px 16px rgba(59, 130, 246, 0.15);
     }
     .light-mode .container {
       background: #ffffff;
     }
     .dark-mode .container {
-      background: #1f2937;
+      background: #2a4365;
     }
     .section-box {
-      background: linear-gradient(to bottom, #ffffff, #f3f4f6);
+      background: linear-gradient(to bottom, #ffffff, #f0f8ff);
       border-radius: 0.5rem;
       padding: 1.5rem;
       margin-bottom: 1.5rem;
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+      box-shadow: 0 4px 8px rgba(59, 130, 246, 0.1);
+      border: 1px solid #dbeafe;
     }
     .dark-mode .section-box {
-      background: linear-gradient(to bottom, #374151, #1f2937);
+      background: linear-gradient(to bottom, #3182ce, #2c5282);
       box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      border: 1px solid #4299e1;
     }
     .theme-toggle {
       position: fixed;
@@ -117,11 +242,11 @@ const HOMEPAGE_HTML = `
       bottom: 1rem;
       left: 50%;
       transform: translateX(-50%);
-      background: #10b981;
+      background: #3182ce;
       color: white;
       padding: 0.75rem 1.5rem;
       border-radius: 0.5rem;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      box-shadow: 0 4px 6px rgba(59, 130, 246, 0.2);
       opacity: 0;
       transition: opacity 0.3s;
       font-size: 0.9rem;
@@ -138,19 +263,37 @@ const HOMEPAGE_HTML = `
       max-width: 100%;
       padding: 0.5rem;
       border-radius: 0.25rem;
-      background: #f3f4f6;
+      background: #ebf8ff;
     }
     .dark-mode .result-text {
-      background: #2d3748;
+      background: #2c5282;
     }
 
     input[type="text"] {
       background-color: white !important;
-      color: #111827 !important;
+      color: #1a365d !important;
     }
     .dark-mode input[type="text"] {
-      background-color: #374151 !important;
-      color: #e5e7eb !important;
+      background-color: #2c5282 !important;
+      color: #e2e8f0 !important;
+    }
+
+    h1, h2 {
+      color: #1a365d;
+    }
+    .dark-mode h1, .dark-mode h2 {
+      color: #ebf8ff;
+    }
+
+    button {
+      transition: all 0.3s ease;
+    }
+
+    .bg-blue-500 {
+      background-color: #3182ce;
+    }
+    .bg-blue-500:hover {
+      background-color: #2b6cb0;
     }
 
     @media (max-width: 640px) {
@@ -201,12 +344,15 @@ const HOMEPAGE_HTML = `
   </style>
 </head>
 <body class="light-mode">
-  <button onclick="toggleTheme()" class="theme-toggle bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-full hover:bg-gray-300 dark:hover:bg-gray-600 transition">
+  <button onclick="toggleTheme()" class="theme-toggle bg-blue-100 dark:bg-blue-800 text-blue-800 dark:text-blue-100 rounded-full hover:bg-blue-200 dark:hover:bg-blue-700 transition">
     <span class="sun">☀️</span>
     <span class="moon hidden">🌙</span>
   </button>
+  <a href="/admin" target="_blank" class="theme-toggle bg-blue-100 dark:bg-blue-800 text-blue-800 dark:text-blue-100 rounded-full hover:bg-blue-200 dark:hover:bg-blue-700 transition" style="right: 4rem;">
+    🔧
+  </a>
   <div class="container mx-auto">
-    <h1 class="text-3xl font-bold text-center mb-8">Cloudflare 加速下载</h1>
+    <h1 class="text-3xl font-bold text-center mb-8">ZQ-Proxy</h1>
 
     <!-- GitHub 链接转换 -->
     <div class="section-box">
@@ -254,6 +400,15 @@ const HOMEPAGE_HTML = `
       <p id="docker-result" class="mt-2 text-green-600 dark:text-green-400 result-text hidden"></p>
       <div id="docker-buttons" class="flex gap-2 mt-2 docker-buttons hidden">
         <button onclick="copyDockerCommand()" class="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-3 py-1 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500 transition w-full">📋 复制命令</button>
+      </div>
+    </div>
+
+    <!-- 当前白名单域名 -->
+    <div class="section-box">
+      <h2 class="text-xl font-semibold mb-2">📋 当前白名单域名</h2>
+      <p class="text-gray-600 dark:text-gray-300 mb-4">以下域名已添加到白名单，可通过代理访问</p>
+      <div class="space-y-3">
+        {{domains_list}}
       </div>
     </div>
 
@@ -468,7 +623,25 @@ async function handleRequest1js(request, redirectCount = 0) {
 
   // 首页路由
   if (path === '/' || path === '') {
-    return new Response(HOMEPAGE_HTML, {
+    // 获取域名白名单
+    const domains = await getDomainWhitelist();
+    // 生成域名列表（不包含删除按钮）
+    const domainsList = domains.map(domain => {
+      const proxyDomain = domain.replace(/\./g, '-') + '-proxy.vpnjacky.dpdns.org';
+      return `
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 border border-gray-200 rounded-lg">
+          <div class="flex-1 mb-2 sm:mb-0">
+            <div class="text-gray-700 font-medium">${domain}</div>
+            <div class="text-gray-500 text-sm mt-1">
+              代理域名: <a href="https://${proxyDomain}" target="_blank" class="text-blue-500 hover:underline">${proxyDomain}</a>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    // 替换模板中的占位符
+    const homepageHtml = HOMEPAGE_HTML.replace('{{domains_list}}', domainsList);
+    return new Response(homepageHtml, {
       status: 200,
       headers: { 'Content-Type': 'text/html' }
     });
@@ -555,7 +728,8 @@ async function handleRequest1js(request, redirectCount = 0) {
   }
 
   // 默认白名单检查：只允许 ALLOWED_HOSTS 中的域名
-  if (!ALLOWED_HOSTS.includes(targetDomain)) {
+  const domainWhitelist = await getDomainWhitelist();
+  if (!ALLOWED_HOSTS.includes(targetDomain) && !domainWhitelist.includes(targetDomain)) {
     console.log(`Blocked: Domain ${targetDomain} not in allowed list`);
     return new Response(`Error: Invalid target domain.\n`, { status: 400 });
   }
@@ -730,12 +904,6 @@ async function handleRequest1js(request, redirectCount = 0) {
 }
 
 
-// 由白名单自动生成映射
-const domain_mappings = Object.fromEntries(
-  domain_whitelist.map(domain => [domain, domain.replace(/\./g, '-')])
-);
-
-
 // 需要重定向的路径
 const redirect_paths = ['/login', '/signup', '/copilot', '/search/custom_scopes', '/session'];
 
@@ -743,8 +911,314 @@ addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request));
 });
 
+// 从KV获取管理员密码
+async function getAdminPassword() {
+  try {
+    if (typeof Proxy !== 'undefined') {
+      const password = await Proxy.get('admin_password');
+      return password;
+    }
+  } catch (error) {
+    console.error('Error getting admin password from KV:', error);
+  }
+  return null;
+}
+
+// 保存管理员密码到KV
+async function saveAdminPassword(password) {
+  try {
+    if (typeof Proxy !== 'undefined') {
+      await Proxy.put('admin_password', password);
+      return true;
+    }
+  } catch (error) {
+    console.error('Error saving admin password to KV:', error);
+  }
+  return false;
+}
+
+// 管理员认证检查
+async function isAdminAuthenticated(request) {
+  // 从KV获取密码
+  const savedPassword = await getAdminPassword();
+  
+  // 如果没有设置密码，返回false，需要设置密码
+  if (!savedPassword) {
+    return false;
+  }
+  
+  // 验证密码
+  const url = new URL(request.url);
+  const password = url.searchParams.get('pwd');
+  return password === savedPassword;
+}
+
+// 渲染管理员页面
+function renderAdminPage(domains) {
+  // 生成域名列表
+  const domainsList = domains.map(domain => {
+    const proxyDomain = domain.replace(/\./g, '-') + '-proxy.vpnjacky.dpdns.org';
+    return `
+      <div class="domain-item flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 border border-gray-200 rounded-lg mb-3">
+        <div class="flex-1 mb-2 sm:mb-0">
+          <div class="text-gray-700 font-medium">${domain}</div>
+          <div class="text-gray-500 text-sm mt-1">
+            代理域名: <a href="https://${proxyDomain}" target="_blank" class="text-blue-500 hover:underline">${proxyDomain}</a>
+          </div>
+        </div>
+        <form method="POST" class="inline">
+          <input type="hidden" name="domain" value="${domain}">
+          <input type="hidden" name="action" value="remove">
+          <button type="submit" class="text-red-500 hover:text-red-700 px-3 py-1 rounded hover:bg-red-50">
+            删除
+          </button>
+        </form>
+      </div>
+    `;
+  }).join('');
+  
+  // 替换模板中的占位符
+  return ADMIN_PAGE_HTML
+    .replace('{{domains_list}}', domainsList);
+}
+
+// 渲染密码设置页面
+function renderPasswordSetupPage() {
+  return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>设置管理员密码 - ZQ-Proxy</title>
+      <script src="https://cdn.tailwindcss.com"></script>
+      <style>
+        body {
+          min-height: 100vh;
+          background: linear-gradient(to bottom right, #e6f0ff, #f0f8ff);
+          color: #1a365d;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-family: 'Inter', sans-serif;
+          padding: 1rem;
+        }
+        .container {
+          max-width: 500px;
+          width: 100%;
+          padding: 2rem;
+          background: white;
+          border-radius: 0.75rem;
+          box-shadow: 0 8px 16px rgba(59, 130, 246, 0.15);
+          border: 1px solid #dbeafe;
+        }
+        h1 {
+          color: #1a365d;
+          margin-bottom: 1.5rem;
+        }
+        .bg-blue-500 {
+          background-color: #3182ce;
+        }
+        .bg-blue-500:hover {
+          background-color: #2b6cb0;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1 class="text-2xl font-bold text-center mb-6">设置管理员密码</h1>
+        <p class="text-gray-600 mb-4">首次访问管理员界面，请设置一个安全的密码。</p>
+        <form method="POST">
+          <input type="hidden" name="action" value="set_password">
+          <div class="mb-4">
+            <label for="password" class="block text-gray-700 mb-2">管理员密码</label>
+            <input type="password" id="password" name="password" placeholder="请输入密码" 
+                   class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div class="mb-6">
+            <label for="confirm_password" class="block text-gray-700 mb-2">确认密码</label>
+            <input type="password" id="confirm_password" name="confirm_password" placeholder="请再次输入密码" 
+                   class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <button type="submit" class="w-full bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
+            设置密码
+          </button>
+        </form>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+// 渲染登录页面
+function renderLoginPage() {
+  return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>管理员登录 - ZQ-Proxy</title>
+      <script src="https://cdn.tailwindcss.com"></script>
+      <style>
+        body {
+          min-height: 100vh;
+          background: linear-gradient(to bottom right, #e6f0ff, #f0f8ff);
+          color: #1a365d;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-family: 'Inter', sans-serif;
+          padding: 1rem;
+        }
+        .container {
+          max-width: 500px;
+          width: 100%;
+          padding: 2rem;
+          background: white;
+          border-radius: 0.75rem;
+          box-shadow: 0 8px 16px rgba(59, 130, 246, 0.15);
+          border: 1px solid #dbeafe;
+        }
+        h1 {
+          color: #1a365d;
+          margin-bottom: 1.5rem;
+        }
+        .bg-blue-500 {
+          background-color: #3182ce;
+        }
+        .bg-blue-500:hover {
+          background-color: #2b6cb0;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1 class="text-2xl font-bold text-center mb-6">管理员登录</h1>
+        <p class="text-gray-600 mb-4">请输入管理员密码以访问管理界面。</p>
+        <form method="GET" action="/admin">
+          <div class="mb-6">
+            <label for="pwd" class="block text-gray-700 mb-2">管理员密码</label>
+            <input type="password" id="pwd" name="pwd" placeholder="请输入密码" 
+                   class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <button type="submit" class="w-full bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
+            登录
+          </button>
+        </form>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+// 管理员页面处理函数
+async function handleAdminRequest(request) {
+  const url = new URL(request.url);
+  
+  // 检查是否已设置密码
+  const savedPassword = await getAdminPassword();
+  
+  // 如果没有设置密码，显示密码设置页面
+  if (!savedPassword) {
+    if (request.method === 'GET') {
+      return new Response(renderPasswordSetupPage(), {
+        headers: { 'Content-Type': 'text/html' }
+      });
+    } else if (request.method === 'POST') {
+      // 处理密码设置
+      const formData = await request.formData();
+      const action = formData.get('action');
+      
+      if (action === 'set_password') {
+        const password = formData.get('password');
+        const confirmPassword = formData.get('confirm_password');
+        
+        if (!password || password.length < 6) {
+          return new Response('密码长度至少6位', { status: 400 });
+        }
+        
+        if (password !== confirmPassword) {
+          return new Response('两次输入的密码不一致', { status: 400 });
+        }
+        
+        // 保存密码
+        const success = await saveAdminPassword(password);
+        if (success) {
+          // 密码设置成功，重定向到管理员页面
+          return Response.redirect('/admin?pwd=' + password, 302);
+        } else {
+          return new Response('密码设置失败', { status: 500 });
+        }
+      }
+    }
+  } else {
+    // 密码已设置，检查是否提供了密码
+    const providedPassword = url.searchParams.get('pwd');
+    if (!providedPassword) {
+      // 没有提供密码，显示登录页面
+      return new Response(renderLoginPage(), {
+        headers: { 'Content-Type': 'text/html' }
+      });
+    }
+  }
+  
+  // 管理员认证
+  if (!await isAdminAuthenticated(request)) {
+    // 认证失败，显示登录页面
+    return new Response(renderLoginPage(), {
+      headers: { 'Content-Type': 'text/html' }
+    });
+  }
+  
+  if (request.method === 'GET') {
+    // 显示管理员页面
+    const domains = await getDomainWhitelist();
+    return new Response(renderAdminPage(domains), {
+      headers: { 'Content-Type': 'text/html' }
+    });
+  } else if (request.method === 'POST') {
+    // 处理域名更新
+    try {
+      const formData = await request.formData();
+      const action = formData.get('action');
+      const domain = formData.get('domain');
+      
+      const currentWhitelist = await getDomainWhitelist();
+      let updatedWhitelist = [...currentWhitelist];
+      
+      if (action === 'add' && domain) {
+        // 添加域名
+        if (!updatedWhitelist.includes(domain)) {
+          updatedWhitelist.push(domain);
+        }
+      } else if (action === 'remove' && domain) {
+        // 删除域名
+        updatedWhitelist = updatedWhitelist.filter(d => d !== domain);
+      }
+      
+      // 保存到KV
+      await saveDomainWhitelist(updatedWhitelist);
+      
+      // 重定向回管理员页面
+      return Response.redirect(url.origin + '/admin?pwd=' + url.searchParams.get('pwd'), 302);
+    } catch (error) {
+      console.error('Error processing admin request:', error);
+      return new Response('Error processing request', { status: 500 });
+    }
+  }
+  
+  return new Response('Method not allowed', { status: 405 });
+}
+
 async function handleRequest(request) {
   const url = new URL(request.url);
+  
+  // 管理员页面路由
+  if (url.pathname.startsWith('/admin')) {
+    return handleAdminRequest(request);
+  }
+  
   // 统一转小写
   const current_host = url.host.toLowerCase();
   const host_header = request.headers.get('Host');
@@ -770,6 +1244,9 @@ async function handleRequest(request) {
 
   // 根据前缀找到对应的原始域名
   let target_host = null;
+  
+  // 获取动态域名映射
+  const domain_mappings = await getDomainMappings();
   
   // 解析 *-proxy. 模式
   if (host_prefix && host_prefix.endsWith('-proxy.')) {
@@ -830,7 +1307,7 @@ async function handleRequest(request) {
     new_response_headers.delete('clear-site-data');
     
     // 处理响应内容，替换域名引用，使用有效主机名来决定域名后缀
-    const modified_body = await modifyResponse(response_clone, host_prefix, effective_host);
+    const modified_body = await modifyResponse(response_clone, host_prefix, effective_host, domain_mappings);
 
     return new Response(modified_body, {
       status: response.status,
@@ -852,7 +1329,7 @@ function getProxyPrefix(host) {
   return null;
 }
 
-async function modifyResponse(response, host_prefix, effective_hostname) {
+async function modifyResponse(response, host_prefix, effective_hostname, domain_mappings) {
   // 只处理文本内容
   const content_type = response.headers.get('content-type') || '';
   if (!content_type.includes('text/') && !content_type.includes('application/json') && 
