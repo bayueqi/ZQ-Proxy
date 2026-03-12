@@ -7,7 +7,7 @@
 ## 特性
 
 ### GitHub代理功能
-- **子域名匹配系统**：使用 `-github.` 后缀作为GitHub主站的代理入口，支持任何域名后缀
+- **子域名匹配系统**：使用 `-proxy.` 后缀作为GitHub主站的代理入口，支持任何域名后缀
 - **完整的资源映射**：支持GitHub相关的所有主要域名，包括API、静态资源、用户内容等
 - **内容替换**：自动替换响应中的所有域名引用，确保链接正常工作
 - **路径修复**：解决嵌套URL路径问题，特别针对仓库提交信息等特殊路径
@@ -27,11 +27,11 @@
 
 服务支持以下GitHub相关域名的代理访问：
 
-- github.com → github-com-github.[您的域名]
-- avatars.githubusercontent.com → avatars-githubusercontent-com-github.[您的域名]
-- github.githubassets.com → github-githubassets-com-github.[您的域名]
-- api.github.com → api-github-com-github.[您的域名]
-- raw.githubusercontent.com → raw-githubusercontent-com-github.[您的域名]
+- github.com → github-com-proxy.[您的域名]
+- avatars.githubusercontent.com → avatars-githubusercontent-com-proxy.[您的域名]
+- github.githubassets.com → github-githubassets-com-proxy.[您的域名]
+- api.github.com → api-github-com-proxy.[您的域名]
+- raw.githubusercontent.com → raw-githubusercontent-com-proxy.[您的域名]
 - 以及更多GitHub相关服务域名
 
 ### 加速下载域名
@@ -61,7 +61,7 @@
    - 例如 `*.您的域名` A记录指向任何IP并开启代理
 
 4. **配置Worker路由和域名**
-   - 添加路由 `*-github.您的域名/*` 指向您的Worker
+   - 添加路由 `*-proxy.您的域名/*` 指向您的Worker
    - 添加域名指向您的Worker（用于加速工具界面）
 
 ## 使用方法
@@ -75,7 +75,7 @@
 https://github.com/用户名/仓库名
 
 # 代理URL
-https://github-com-github.您的域名/用户名/仓库名
+https://github-com-proxy.您的域名/用户名/仓库名
 ```
 
 其他GitHub资源的访问方式类似，系统会自动处理域名映射和内容替换。
