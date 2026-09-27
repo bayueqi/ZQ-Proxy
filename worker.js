@@ -21,37 +21,89 @@ const domain_whitelist = [
 ];
 
 // KV空间绑定（需要在Cloudflare Worker设置中配置）
-// 绑定名称：Proxy
+// 绑定名称：Proxy。面板 → 设置 → 绑定 → KV 命名空间，变量名必须填 Proxy，没有别名。
+
+// KV 绑定名，只有一个：Proxy。
+//
+// 关键点：绝对不要用 `typeof Proxy !== 'undefined'` 判断绑定是否存在 ——
+// Proxy 是 JS 内置构造器，这个判断恒为真。绑定没注入时就会在 Proxy.get(...) 直接抛异常，
+// 于是**每个请求都抛一次并写一条 error 日志**，既白费 CPU，又把 Workers Logs 免费额度（20 万事件/天）吃掉一半。
+// 所以这里改成特性检测：内置 Proxy 构造器上只有 revocable，没有 get/put，天然被排除掉；
+// 只有面板真的把 KV 命名空间注入到 globalThis.Proxy 上，它才会被认出来。
+const KV_BINDING_NAME = 'Proxy';
+
+function getKV() {
+  let candidate;
+  try {
+    // 先读注入到全局的绑定（service worker 格式的常规位置），
+    // 再读 env 上的同名绑定（只是同一个名字的另一个注入位置，不是别名）。
+    candidate = globalThis[KV_BINDING_NAME];
+    if (!isKVNamespace(candidate) && globalThis.env) {
+      candidate = globalThis.env[KV_BINDING_NAME];
+    }
+  } catch {
+    candidate = undefined;
+  }
+  return isKVNamespace(candidate) ? candidate : null;
+}
+
+// 必须同时有 get / put 才算真的 KV 命名空间。
+// 内置 Proxy 构造器没有这两个方法，所以「绑定没配」时这里一定返回 false，不会误判。
+function isKVNamespace(obj) {
+  return !!obj && typeof obj.get === 'function' && typeof obj.put === 'function';
+}
+
+// 白名单内存缓存：KV 免费额度只有 10 万读/天，而本服务每个请求都要查白名单，
+// 不缓存的话光是这一项就会顶到配额上限。
+let cachedWhitelist = null;
+let cachedWhitelistAt = 0;
+const WHITELIST_TTL_MS = 60000;
 
 // 从KV获取域名白名单
 async function getDomainWhitelist() {
-  try {
-    // 检查KV空间是否存在
-    if (typeof Proxy !== 'undefined') {
-      const whitelist = await Proxy.get('domain_whitelist');
-      if (whitelist) {
-        return JSON.parse(whitelist);
-      }
-    }
-  } catch (error) {
-    console.error('Error getting domain whitelist from KV:', error);
+  const now = Date.now();
+  if (cachedWhitelist && now - cachedWhitelistAt < WHITELIST_TTL_MS) {
+    return cachedWhitelist;
   }
-  // 默认白名单作为回退
-  return domain_whitelist;
+
+  const kv = getKV();
+  if (kv) {
+    try {
+      const raw = await kv.get('domain_whitelist');
+      if (raw) {
+        cachedWhitelist = JSON.parse(raw);
+        cachedWhitelistAt = now;
+        return cachedWhitelist;
+      }
+    } catch (error) {
+      // 只记 message，别记整个对象，日志体积也要省
+      console.error('Error getting domain whitelist from KV:', error && error.message ? error.message : String(error));
+    }
+  }
+
+  // 回退到默认白名单，并短暂缓存，避免 KV 为空时每个请求都去读一次
+  cachedWhitelist = domain_whitelist;
+  cachedWhitelistAt = now;
+  return cachedWhitelist;
 }
 
 // 保存域名白名单到KV
 async function saveDomainWhitelist(whitelist) {
+  const kv = getKV();
+  if (!kv) {
+    console.error('KV binding missing: 白名单无法保存（面板 → 设置 → 绑定，KV 命名空间的变量名填 Proxy）');
+    return false;
+  }
   try {
-    if (typeof Proxy !== 'undefined') {
-      await Proxy.put('domain_whitelist', JSON.stringify(whitelist));
-      // 更新内存中的domain_whitelist变量
-      domain_whitelist.length = 0;
-      whitelist.forEach(domain => domain_whitelist.push(domain));
-      return true;
-    }
+    await kv.put('domain_whitelist', JSON.stringify(whitelist));
+    // 更新内存中的domain_whitelist变量与缓存
+    domain_whitelist.length = 0;
+    whitelist.forEach(domain => domain_whitelist.push(domain));
+    cachedWhitelist = whitelist;
+    cachedWhitelistAt = Date.now();
+    return true;
   } catch (error) {
-    console.error('Error saving domain whitelist to KV:', error);
+    console.error('Error saving domain whitelist to KV:', error && error.message ? error.message : String(error));
   }
   return false;
 }
@@ -89,6 +141,34 @@ const ALLOWED_PATHS = [
   'user-id-1',
   'user-id-2',
 ];
+
+// 浏览器端缓存策略：分级设置，回访时少发请求才是真正降低请求数的办法
+const STATIC_CACHE = 'public, max-age=31536000, immutable'; // 带指纹的图片/字体/媒体
+const ASSET_CACHE = 'public, max-age=86400, stale-while-revalidate=86400'; // 无指纹的 js/css
+const HTML_CACHE = 'public, max-age=14400'; // 保持原有行为
+const JSON_CACHE = 'public, max-age=300';
+
+// DOCKER_BLOB_DIRECT: Docker 镜像层（blob）是否改成 302 直连源站 CDN。
+// 一次 docker pull 的每个 layer 都是一次独立的 Worker 请求，现在是全部由 Worker 转发；
+// 打开后客户端自己去 CDN 下载，Worker 只保留兜底，请求数能降一大截。
+// 前提是客户端所在网络能直连该 CDN（Docker Hub 的分发域名多为 Cloudflare 系）。
+// 打开前请先本机 docker pull 验证一次；不通就保持 false。
+const DOCKER_BLOB_DIRECT = false;
+
+// 排查用（临时）：只给这几个目标站打一行「来源指纹」。
+// Workers Logs 免费只有 20 万事件/天，不能全量打；查清楚 gist 的请求方是谁之后这段可以整块删掉。
+const TRACE_HOSTS = [
+  'gist.github.com',
+  'gist.githubusercontent.com',
+  'raw.githubusercontent.com'
+];
+
+function logOriginFingerprint(targetHost, request) {
+  if (!TRACE_HOSTS.includes(targetHost)) return;
+  const ua = (request.headers.get('User-Agent') || '-').slice(0, 90);
+  const ref = (request.headers.get('Referer') || '-').slice(0, 80);
+  console.log(`ORIGIN host=${targetHost} ua=${ua} ref=${ref}`);
+}
 
 // 闪电 SVG 图标（Base64 编码）
 const LIGHTNING_SVG = `
@@ -565,7 +645,17 @@ const HOMEPAGE_HTML = `
 </html>
 `;
 
+// Docker registry 匿名 token 缓存（isolate 级，尽力而为）。
+// 不加这个的话，每次 401 都要额外往返一次 realm 换 token，容器拉取时会被放大很多次。
+const tokenCache = new Map();
+
 async function handleToken(realm, service, scope) {
+  const cacheKey = `${realm}|${service}|${scope}`;
+  const cached = tokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 30000) {
+    return cached.token;
+  }
+
   const tokenUrl = `${realm}?service=${service}&scope=${scope}`;
   console.log(`Fetching token from: ${tokenUrl}`);
   try {
@@ -583,6 +673,15 @@ async function handleToken(realm, service, scope) {
       console.log('No token found in response');
       return null;
     }
+    const ttlSeconds = Number(tokenData.expires_in) || 300;
+    // 简单容量保护，避免 isolate 长时间存活时无限增长
+    if (tokenCache.size > 200) {
+      tokenCache.clear();
+    }
+    tokenCache.set(cacheKey, {
+      token,
+      expiresAt: Date.now() + ttlSeconds * 1000
+    });
     console.log('Token acquired successfully');
     return token;
   } catch (error) {
@@ -625,9 +724,11 @@ async function handleRequest1js(request, redirectCount = 0) {
   if (path === '/' || path === '') {
     // 获取域名白名单
     const domains = await getDomainWhitelist();
+    // 当前这次访问用的主机名，用来推导代理域名（不写死域名）
+    const proxy_suffix = getProxySuffix(request.headers.get('Host') || url.host);
     // 生成域名列表（不包含删除按钮）
     const domainsList = domains.map(domain => {
-      const proxyDomain = domain.replace(/\./g, '-') + '-proxy.vpnjacky.dpdns.org';
+      const proxyDomain = domain.replace(/\./g, '-') + '-proxy.' + proxy_suffix;
       return `
         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 border border-gray-200 rounded-lg">
           <div class="flex-1 mb-2 sm:mb-0">
@@ -747,6 +848,9 @@ async function handleRequest1js(request, redirectCount = 0) {
     }
   }
 
+  // 排查用：记录目标站请求的来源指纹
+  logOriginFingerprint(targetDomain, request);
+
   // 构建目标 URL
   let targetUrl;
   if (isDockerRequest) {
@@ -854,6 +958,20 @@ async function handleRequest1js(request, redirectCount = 0) {
       const redirectUrl = response.headers.get('Location');
       if (redirectUrl) {
         console.log(`Redirect detected: ${redirectUrl}`);
+
+        // 直连模式：blob 不再由 Worker 转发，直接把 302 交回客户端去源站 CDN 下载。
+        // 一次 pull 的每个 layer 都是一次独立 Worker 请求，打开后能省掉绝大部分。
+        if (DOCKER_BLOB_DIRECT) {
+          console.log('Blob direct mode: handing redirect back to client');
+          return new Response(null, {
+            status: 302,
+            headers: {
+              'Location': redirectUrl,
+              'Cache-Control': 'no-store'
+            }
+          });
+        }
+
         const EMPTY_BODY_SHA256 = getEmptyBodySHA256();
         const redirectHeaders = new Headers(request.headers);
         redirectHeaders.set('Host', new URL(redirectUrl).hostname);
@@ -913,26 +1031,30 @@ addEventListener('fetch', event => {
 
 // 从KV获取管理员密码
 async function getAdminPassword() {
+  const kv = getKV();
+  if (!kv) {
+    return null;
+  }
   try {
-    if (typeof Proxy !== 'undefined') {
-      const password = await Proxy.get('admin_password');
-      return password;
-    }
+    return await kv.get('admin_password');
   } catch (error) {
-    console.error('Error getting admin password from KV:', error);
+    console.error('Error getting admin password from KV:', error && error.message ? error.message : String(error));
   }
   return null;
 }
 
 // 保存管理员密码到KV
 async function saveAdminPassword(password) {
+  const kv = getKV();
+  if (!kv) {
+    console.error('KV binding missing: 管理员密码无法保存（面板 → 设置 → 绑定，KV 命名空间的变量名填 Proxy）');
+    return false;
+  }
   try {
-    if (typeof Proxy !== 'undefined') {
-      await Proxy.put('admin_password', password);
-      return true;
-    }
+    await kv.put('admin_password', password);
+    return true;
   } catch (error) {
-    console.error('Error saving admin password to KV:', error);
+    console.error('Error saving admin password to KV:', error && error.message ? error.message : String(error));
   }
   return false;
 }
@@ -954,10 +1076,10 @@ async function isAdminAuthenticated(request) {
 }
 
 // 渲染管理员页面
-function renderAdminPage(domains) {
+function renderAdminPage(domains, proxy_suffix) {
   // 生成域名列表
   const domainsList = domains.map(domain => {
-    const proxyDomain = domain.replace(/\./g, '-') + '-proxy.vpnjacky.dpdns.org';
+    const proxyDomain = domain.replace(/\./g, '-') + '-proxy.' + proxy_suffix;
     return `
       <div class="domain-item flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 border border-gray-200 rounded-lg mb-3">
         <div class="flex-1 mb-2 sm:mb-0">
@@ -1174,7 +1296,7 @@ async function handleAdminRequest(request) {
   if (request.method === 'GET') {
     // 显示管理员页面
     const domains = await getDomainWhitelist();
-    return new Response(renderAdminPage(domains), {
+    return new Response(renderAdminPage(domains, getProxySuffix(request.headers.get('Host') || url.host)), {
       headers: { 'Content-Type': 'text/html' }
     });
   } else if (request.method === 'POST') {
@@ -1213,22 +1335,26 @@ async function handleAdminRequest(request) {
 
 async function handleRequest(request) {
   const url = new URL(request.url);
-  
+
   // 管理员页面路由
   if (url.pathname.startsWith('/admin')) {
     return handleAdminRequest(request);
   }
-  
+
   // 统一转小写
   const current_host = url.host.toLowerCase();
   const host_header = request.headers.get('Host');
   const effective_host = (host_header || current_host).toLowerCase();
-  
+
+  // 哪些主机名能进这个 Worker，由 Cloudflare 的路由决定，代码里不再另外维护白名单：
+  //   路由 1：proxy.域名/*          → 加速工具界面 / 管理页（README 里的「添加域名指向 Worker」）
+  //   路由 2：*-proxy.域名/*        → GitHub 各子域代理
+  // 没命中这两条路由的请求（如随机子域）根本不会到达这个 Worker。
   const host_prefix = getProxyPrefix(effective_host);
   if (!host_prefix || url.pathname.startsWith('/https://') || url.pathname.startsWith('/v2/')) {
     return handleRequest1js(request);
   }
-  
+
   // 对于 -proxy. 后缀的域名，即使路径是根路径，也应该进入 GitHub 网站
   
   // 检查特殊路径，返回正常错误
@@ -1264,6 +1390,9 @@ async function handleRequest(request) {
   if (!target_host) {
     return new Response(`Domain not configured for proxy. Host: ${effective_host}, Prefix: ${host_prefix}, Target lookup failed`, { status: 404 });
   }
+
+  // 排查用：记录目标站请求的来源指纹
+  logOriginFingerprint(target_host, request);
 
   // 直接使用正则表达式处理最常见的嵌套URL问题
   let pathname = url.pathname;
@@ -1301,7 +1430,10 @@ async function handleRequest(request) {
     const new_response_headers = new Headers(response.headers);
     new_response_headers.set('access-control-allow-origin', '*');
     new_response_headers.set('access-control-allow-credentials', 'true');
-    new_response_headers.set('cache-control', 'public, max-age=14400');
+    new_response_headers.set(
+      'cache-control',
+      cacheControlFor(response.headers.get('content-type'), pathname)
+    );
     new_response_headers.delete('content-security-policy');
     new_response_headers.delete('content-security-policy-report-only');
     new_response_headers.delete('clear-site-data');
@@ -1327,6 +1459,21 @@ function getProxyPrefix(host) {
   }
 
   return null;
+}
+
+// 从当前请求的主机名推导「代理域名后缀」，页面上展示的代理域名按实际访问用的域名生成，
+// 不在代码里写死任何域名：
+//   proxy.<后缀>      -> <后缀>   （README 部署第 6 步：加速入口 / 管理页挂在这个主机上）
+//   xxx-proxy.<后缀>  -> <后缀>   （GitHub 各子域代理）
+//   其它（裸根域名）   -> 原样返回
+// 与 modifyResponse 里 `effective_hostname.substring(host_prefix.length)` 的算法保持一致。
+function getProxySuffix(host) {
+  const h = String(host || '').toLowerCase().split(':')[0];
+  if (!h) return '';
+  const prefix = getProxyPrefix(h);
+  if (prefix) return h.slice(prefix.length);
+  if (h.startsWith('proxy.')) return h.slice('proxy.'.length);
+  return h;
 }
 
 async function modifyResponse(response, host_prefix, effective_hostname, domain_mappings) {
@@ -1364,4 +1511,39 @@ async function modifyResponse(response, host_prefix, effective_hostname, domain_
 
 
   return text;
+}
+
+// 按响应类型分级设置浏览器缓存。
+// 重点在带指纹的静态资源：之前这里被统一压成 4 小时，
+// 等于把上游本来一年有效的缓存反复作废，回访时又全部重新找 Worker 要一遍。
+function cacheControlFor(contentType, pathname) {
+  const ct = (contentType || '').toLowerCase();
+
+  // 页面短缓存：GitHub 的 HTML 里带动态 token，不能长留
+  if (ct.includes('text/html') || ct.includes('application/xhtml')) {
+    return HTML_CACHE;
+  }
+  if (ct.includes('json')) {
+    return JSON_CACHE;
+  }
+
+  const hasFingerprint =
+    /\.[0-9a-f]{8,}\./i.test(pathname) || /-[0-9a-f]{8,}\./i.test(pathname);
+
+  if (
+    ct.startsWith('image/') ||
+    ct.startsWith('font/') ||
+    ct.startsWith('video/') ||
+    ct.startsWith('audio/') ||
+    hasFingerprint
+  ) {
+    return STATIC_CACHE;
+  }
+
+  if (ct.includes('text/css') || ct.includes('javascript') || ct.includes('wasm')) {
+    return ASSET_CACHE;
+  }
+
+  // 兜底：保持原有行为
+  return HTML_CACHE;
 }
