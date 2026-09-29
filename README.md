@@ -101,16 +101,15 @@ https://proxy.你的域名/密码/github.com/用户名/仓库/releases/download/
 
 每个分组一个折叠栏（默认折叠），展开后可以删单个域名，或删掉整个分组。
 
-KV 里没有 `site_groups` 就是**空白名单**，代码不带任何内置域名 —— 代理谁由你自己加。
+放行名单是**两份取并集**：
 
-**这份名单是唯一的放行依据。** 部署完什么都不加的话，GitHub 和 Docker 加速都会返回
-`Error: Invalid target domain.`。至少先把下面这些加上：
+- **代码内置**（`ALLOWED_HOSTS`，见「代码里的开关」）：`github.com`、`api.github.com`、
+  `raw.githubusercontent.com`、`gist.github.com`、`gist.githubusercontent.com`、
+  `registry-1.docker.io`、`ghcr.io`、`quay.io`、`gcr.io`、`k8s.gcr.io`、`registry.k8s.io`、
+  `docker.cloudsmith.io` —— 这 12 个不用自己加，开箱就能用。
+- **KV 里的 `site_groups`**：就是你在这一页加的那些；KV 没有数据时这份为空，但不影响上面那份。
 
-| 用途 | 要加的域名 |
-| --- | --- |
-| GitHub 文件加速 | `github.com`（`raw.githubusercontent.com`、`gist.githubusercontent.com` 等按需再补） |
-| Docker Hub 官方镜像 | `registry-1.docker.io` |
-| 其他镜像仓库 | `ghcr.io` / `quay.io` / `gcr.io` / `registry.k8s.io` / `docker.cloudsmith.io`，用到哪个加哪个 |
+所以部署完什么都不加，GitHub 和 Docker 照样能通；要代理**别的**站点才需要自己加域名。
 
 ---
 
@@ -164,10 +163,11 @@ raw.githubusercontent.com → raw-githubusercontent-com-proxy.你的域名
 | `KV_BINDING_NAME` | 顶部 | `'Proxy'` | KV 绑定变量名，改了记得同步面板里的绑定名 |
 | `RESTRICT_PATHS` | 顶部 | `false` | 是否限制 GitHub / Docker 的请求路径 |
 | `ALLOWED_PATHS` | 顶部 | `['library', ...]` | `RESTRICT_PATHS` 打开时生效的路径关键字 |
+| `ALLOWED_HOSTS` | 顶部 | 12 个常用域名 | 代码内置的放行白名单（各 Docker registry + GitHub 主干域名），与 KV 的 `site_groups` **取并集** |
 | `DOCKER_BLOB_DIRECT` | 顶部 | `false` | 镜像层是否改成 302 直连源站 CDN。打开能大幅降低 Worker 请求数，**前提是客户端能直连该 CDN** —— 打开前先本机 `docker pull` 验一次 |
 | `STATIC_CACHE` 等 | 顶部 | 见注释 | 按内容类型分级设置的浏览器缓存策略 |
 
-代码里没有任何内置域名清单，关联域名一律靠扫描现取。
+代码里没有内置的「站点 → 关联域名」对照表（放行用的 `ALLOWED_HOSTS` 除外），关联域名一律靠扫描现取。
 
 ---
 

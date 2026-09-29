@@ -328,6 +328,22 @@ async function getDomainMappings() {
   );
 }
 
+// ALLOWED_HOSTS: 定义允许代理的域名列表（默认白名单）。
+const ALLOWED_HOSTS = [
+  'quay.io',
+  'gcr.io',
+  'k8s.gcr.io',
+  'registry.k8s.io',
+  'ghcr.io',
+  'docker.cloudsmith.io',
+  'registry-1.docker.io',
+  'github.com',
+  'api.github.com',
+  'raw.githubusercontent.com',
+  'gist.github.com',
+  'gist.githubusercontent.com'
+];
+
 // RESTRICT_PATHS: 控制是否限制 GitHub 和 Docker 请求的路径。
 const RESTRICT_PATHS = false;
 
@@ -1016,10 +1032,6 @@ async function handleRequest1js(request, redirectCount = 0) {
     return new Response('Invalid request: target domain or path required\n', { status: 400 });
   }
 
-  // 允许代理哪些域名，只认 KV 里那一份（界面「站点分组」维护的）。
-  // 代码里不再内置任何域名 —— 包括 github.com 和各个 Docker 仓库，都得自己在界面上加。
-  const domainWhitelist = await getDomainWhitelist();
-
   let targetDomain, targetPath, isDockerRequest = false;
 
   // 检查路径是否以 https:// 或 http:// 开头
@@ -1052,7 +1064,7 @@ async function handleRequest1js(request, redirectCount = 0) {
         // 处理 docker.io/amilys/embyserver 或 docker.io/library/nginx 格式
         targetPath = pathParts.slice(1).join('/');
       }
-    } else if (domainWhitelist.includes(pathParts[0])) {
+    } else if (ALLOWED_HOSTS.includes(pathParts[0])) {
       // Docker 镜像仓库（如 ghcr.io）或 GitHub 域名（如 github.com）
       targetDomain = pathParts[0];
       targetPath = pathParts.slice(1).join('/') + url.search;
@@ -1075,8 +1087,9 @@ async function handleRequest1js(request, redirectCount = 0) {
     }
   }
 
-  // 白名单检查：不在 KV 里登记的域名一律拒绝
-  if (!domainWhitelist.includes(targetDomain)) {
+  // 默认白名单检查：只允许 ALLOWED_HOSTS 中的域名
+  const domainWhitelist = await getDomainWhitelist();
+  if (!ALLOWED_HOSTS.includes(targetDomain) && !domainWhitelist.includes(targetDomain)) {
     console.log(`Blocked: Domain ${targetDomain} not in allowed list`);
     return new Response(`Error: Invalid target domain.\n`, { status: 400 });
   }
