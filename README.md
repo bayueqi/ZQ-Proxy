@@ -92,10 +92,7 @@ https://proxy.你的域名/密码/github.com/用户名/仓库/releases/download/
 
 填「名称」+「入口域名」→ 点**查找关联域名** → 勾选要放行的域名 → **添加勾选的域名**。
 
-关联域名的来源有两级：
-
-1. 命中内置服务包（目前有 `github.com`）直接返回
-2. 否则抓该站首页 HTML + `Content-Security-Policy` 响应头 + 最多 6 个同站 JS/CSS，从中提取域名
+关联域名的来源：抓该站首页 HTML + `Content-Security-Policy` 响应头 + 最多 6 个同站 JS/CSS，从中提取域名。
 
 入口域名与它的注册域名永远排在结果前两位；扫描失败也会把它们列出来，能加的先加。
 **只在用户操作时才请求的接口域名扫不到**（比如点击登录才连的第三方服务），需要手动补。
@@ -162,7 +159,7 @@ raw.githubusercontent.com → raw-githubusercontent-com-proxy.你的域名
 | `TRACE_HOSTS` | 顶部 | gist 相关 3 个 | 只给这几个目标打一行来源指纹，排查用，用完可整块删 |
 | `STATIC_CACHE` 等 | 顶部 | 见注释 | 按内容类型分级设置的浏览器缓存策略 |
 
-内置服务包写在 `SERVICE_BUNDLES` 里，想给某个站点预置一份域名清单，照着 `github.com` 那一段加即可。
+代码里没有任何内置域名清单，关联域名一律靠扫描现取。
 
 ---
 

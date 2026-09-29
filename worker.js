@@ -3,31 +3,6 @@
 // 这里不再内置任何放行域名 —— 白名单完全由管理页面录入决定，KV 里没有数据就是空白名单。
 // 唯一的例外是下面的 ALLOWED_HOSTS（Docker 仓库 + GitHub 几个主干域名，代码级基础设施）。
 
-// 「服务包」：输入域名后用来「连带找出所有需要的域名」的映射知识。
-// 只用于查找和预填，不会自动放行；是否加入白名单由管理页面上勾选确认。
-const SERVICE_BUNDLES = {
-  'github.com': [
-    'github.com',
-    'avatars.githubusercontent.com',
-    'github.githubassets.com',
-    'collector.github.com',
-    'api.github.com',
-    'raw.githubusercontent.com',
-    'gist.githubusercontent.com',
-    'github.io',
-    'assets-cdn.github.com',
-    'cdn.jsdelivr.net',
-    'securitylab.github.com',
-    'www.githubstatus.com',
-    'npmjs.com',
-    'git-lfs.github.com',
-    'githubusercontent.com',
-    'github.global.ssl.fastly.net',
-    'api.npms.io',
-    'github.community'
-  ]
-};
-
 // KV空间绑定（需要在Cloudflare Worker设置中配置）
 // 绑定名称：Proxy。面板 → 设置 → 绑定 → KV 命名空间，变量名必须填 Proxy，没有别名。
 
@@ -138,8 +113,7 @@ function registrableDomain(host) {
 }
 
 // 按输入域名找出「这个站点需要的所有域名」。
-// 1) 先查预置服务包（输入 github.com，或输入包里的某个域名，如 api.github.com，都命中同一个包）
-// 2) 没命中就扫描首页 + 首页引用的同站 JS/CSS，按「出现在几类来源里、出现多少次」排序
+// 扫描首页 + 首页引用的同站 JS/CSS，按「出现在几类来源里、出现多少次」排序。
 // 入口域名本身永远排在最前：首页 HTML 大多写相对路径，只扫 HTML 的话输入域名根本不会出现在结果里。
 // source 会如实告诉调用方结果是从哪来的，页面要如实展示。
 async function findRelatedDomains(input) {
@@ -153,28 +127,12 @@ async function findRelatedDomains(input) {
     return { source: 'none', domains: [], message: '请输入域名' };
   }
 
-  let source;
-  let items;
-  let scanned = 0;
-  let errorMessage = '';
-
-  if (SERVICE_BUNDLES[domain]) {
-    source = 'bundle';
-    items = SERVICE_BUNDLES[domain].map(d => ({ domain: d, count: 0 }));
-  } else {
-    const bundleKey = Object.keys(SERVICE_BUNDLES).find(key => SERVICE_BUNDLES[key].includes(domain));
-    if (bundleKey) {
-      source = 'bundle';
-      items = SERVICE_BUNDLES[bundleKey].map(d => ({ domain: d, count: 0 }));
-    } else {
-      const scan = await scanHomepageDomains(domain);
-      source = scan.error ? 'error' : 'scan';
-      // 扫描失败也把入口域名给出来 —— 至少让人能先把输入的那个域名加进白名单
-      items = scan.error ? [] : scan.domains;
-      scanned = scan.scanned || 0;
-      errorMessage = scan.error || '';
-    }
-  }
+  const scan = await scanHomepageDomains(domain);
+  const source = scan.error ? 'error' : 'scan';
+  // 扫描失败也把入口域名给出来 —— 至少让人能先把输入的那个域名加进白名单
+  let items = scan.error ? [] : scan.domains;
+  const scanned = scan.scanned || 0;
+  const errorMessage = scan.error || '';
 
   // 入口域名 + 它的注册域名，无论扫描到什么都排在最前面
   const lead = [{ domain, count: 0, entry: true, sources: [] }];
@@ -203,7 +161,7 @@ const SCAN_SUBRESOURCE_LIMIT = 6;
 const SCAN_TEXT_LIMIT = 3 * 1024 * 1024;
 
 // 命名空间 / 规范类域名（连它们的子域一起）：出现在 xmlns、$schema、示例里，不是网络请求，
-// 抓进来只会干扰判断。只影响「扫描结果」，不影响服务包和用户自己勾选的域名。
+// 抓进来只会干扰判断。只影响「扫描结果」，不影响用户自己勾选的域名。
 const NON_NETWORK_HOSTS = [
   'w3.org', 'schema.org', 'json-schema.org',
   'example.com', 'example.org', 'example.net', 'localhost'
@@ -721,10 +679,8 @@ const APP_PAGE_HTML = `
         // 扫描失败也照样把入口域名列出来，能加的先加上
         status.textContent = data.message;
       } else {
-        status.textContent = data.source === 'bundle'
-          ? '命中预置服务包，共 ' + data.domains.length + ' 个域名'
-          : '扫描结果，共 ' + data.domains.length + ' 个 —— 已扫首页 + CSP 头 + ' + (data.scanned || 0) +
-            ' 个同站脚本；只在操作时才请求的接口域名仍然抓不到';
+        status.textContent = '扫描结果，共 ' + data.domains.length + ' 个 —— 已扫首页 + CSP 头 + ' + (data.scanned || 0) +
+          ' 个同站脚本；只在操作时才请求的接口域名仍然抓不到';
       }
 
       data.domains.forEach(item => {
