@@ -80,6 +80,58 @@ async function saveSiteGroups(groups) {
   return false;
 }
 
+// 文件下载用的放行域名：独立于「站点分组」的一份名单，KV key 是 download_domains。
+// 只参与放行判断（外加路径形式的目标域名识别），不参与主机名映射和正文改写 ——
+// 所以它不会在「域名代理」那边凭空冒出来，两边各管各的。
+let cachedDownloadDomains = null;
+let cachedDownloadDomainsAt = 0;
+
+async function getDownloadDomains() {
+  const now = Date.now();
+  if (cachedDownloadDomains && now - cachedDownloadDomainsAt < GROUPS_TTL_MS) {
+    return cachedDownloadDomains;
+  }
+
+  const kv = getKV();
+  if (kv) {
+    try {
+      const raw = await kv.get('download_domains');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        cachedDownloadDomains = Array.isArray(parsed)
+          ? parsed.map(item => String(item).trim().toLowerCase()).filter(Boolean)
+          : [];
+        cachedDownloadDomainsAt = now;
+        return cachedDownloadDomains;
+      }
+    } catch (error) {
+      console.error('Error getting download domains from KV:', error && error.message ? error.message : String(error));
+    }
+  }
+
+  // KV 里没有就是空名单 —— 内置的那 12 个域名照旧放行，不在这里补
+  cachedDownloadDomains = [];
+  cachedDownloadDomainsAt = now;
+  return cachedDownloadDomains;
+}
+
+async function saveDownloadDomains(domains) {
+  const kv = getKV();
+  if (!kv) {
+    console.error('KV binding missing: 放行域名无法保存（面板 → 设置 → 绑定，KV 命名空间的变量名填 Proxy）');
+    return false;
+  }
+  try {
+    await kv.put('download_domains', JSON.stringify(domains));
+    cachedDownloadDomains = domains;
+    cachedDownloadDomainsAt = Date.now();
+    return true;
+  } catch (error) {
+    console.error('Error saving download domains to KV:', error && error.message ? error.message : String(error));
+  }
+  return false;
+}
+
 // 注册域名（eTLD+1）。不能一律取后两段：douyin.com.cn 的注册域名是 douyin.com.cn 而不是 com.cn。
 // 这里只列常见的两段式公共后缀，够用且不用引整个公共后缀表。
 const TWO_LEVEL_SUFFIXES = new Set([
@@ -483,6 +535,39 @@ const APP_PAGE_HTML = `
       margin-top: 10px;
     }
 
+    /* 板块切换栏：三个按钮等宽，选中的填蓝底 */
+    .tab-bar {
+      display: flex;
+      gap: 6px;
+      padding: 6px;
+      margin-bottom: 1rem;
+      background: rgba(255, 255, 255, 0.75);
+      border: 1px solid #dbeafe;
+      border-radius: 0.75rem;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px 6px;
+      border: none;
+      background: transparent;
+      color: #1a365d;
+      font-size: 15px;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .tab-btn:hover {
+      background: #eff6ff;
+    }
+    .tab-btn.active {
+      background: #3182ce;
+      color: #ffffff;
+    }
+    /* hidden 要压过 Tailwind 的 display 工具类，否则面板切不干净 */
+    .tab-panel[hidden] {
+      display: none !important;
+    }
+
     /* 手机端：收窄留白、字号降一档，触控目标保持够大 */
     @media (max-width: 640px) {
       .card {
@@ -505,6 +590,11 @@ const APP_PAGE_HTML = `
         padding: 6px 10px;
         font-size: 13px;
       }
+      /* 320px 窄屏下「Docker 拉取」按 15px 放不下会折成两行，把三个按钮高度顶歪 */
+      .tab-btn {
+        padding: 10px 4px;
+        font-size: 13px;
+      }
       /* 手机上让 tag 列表用视口高度，别被 220px 卡得太矮 */
       .tag-list {
         max-height: 45vh;
@@ -515,6 +605,16 @@ const APP_PAGE_HTML = `
 <body>
   <div class="container mx-auto px-3 sm:px-4 py-6 sm:py-8">
     <h1 class="text-2xl sm:text-3xl font-bold mb-5 sm:mb-6 text-center text-gray-800">ZQ-Proxy</h1>
+
+    <!-- 三个板块：纯前端显隐（不刷新页面，刷新会把刚生成的链接和查询结果丢掉） -->
+    <div class="tab-bar">
+      <button type="button" class="tab-btn active" data-tab="download">文件下载</button>
+      <button type="button" class="tab-btn" data-tab="docker">Docker 拉取</button>
+      <button type="button" class="tab-btn" data-tab="domains">域名代理</button>
+    </div>
+
+    <!-- ═══ 文件下载 ═══ -->
+    <div class="tab-panel" data-panel="download">
 
     <!-- GitHub 文件加速：一个输入框，把 github.com/... 的路径整段粘进来就行。密码用登录的那个，不单独填 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
@@ -536,6 +636,25 @@ const APP_PAGE_HTML = `
       </div>
     </div>
 
+    <!-- 放行域名：文件下载专用的一份名单（KV 的 download_domains），和「域名代理」里的站点分组互不影响 -->
+    <div class="card p-4 sm:p-6">
+      <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">放行域名</h2>
+      <div class="flex flex-col sm:flex-row gap-3">
+        <input type="text" id="dl-domain" placeholder="mirrors.sdu.edu.cn"
+               class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <button type="button" id="dl-add" class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
+          添加
+        </button>
+      </div>
+      <div id="dl-status" class="text-sm text-gray-500 mt-3"></div>
+      <div id="dl-list" class="mt-3 space-y-2"></div>
+    </div>
+
+    </div>
+
+    <!-- ═══ Docker 拉取 ═══ -->
+    <div class="tab-panel" data-panel="docker" hidden>
+
     <!-- 镜像查询 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
       <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">Docker 镜像查询</h2>
@@ -549,6 +668,11 @@ const APP_PAGE_HTML = `
       <div id="image-status" class="text-sm text-gray-500 mt-3"></div>
       <div id="image-results" class="mt-3"></div>
     </div>
+
+    </div>
+
+    <!-- ═══ 域名代理 ═══ -->
+    <div class="tab-panel" data-panel="domains" hidden>
 
     <!-- 添加站点：填名称和域名，域名会自动带出关联域名 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
@@ -581,11 +705,16 @@ const APP_PAGE_HTML = `
       </div>
     </div>
 
+    </div>
+
   </div>
 
   <script>
     const PWD = new URLSearchParams(location.search).get('pwd') || '';
     const SUFFIX = '{{proxy_suffix}}';
+    // 「放行域名」那份名单（KV 的 download_domains）与代码内置域名，服务端渲染时注入
+    let downloadDomains = {{download_domains_json}};
+    const BUILTIN_DOMAINS = {{builtin_domains_json}};
 
     // 注意：这段脚本整体是 JS 模板字符串，里面的 \. 会被 JS 当无效转义吞掉、变成「任意字符」，
     // 所以点要写成字符类 [.]。（同理所有正则都别用 \/ 转义，见下面两处。）
@@ -710,6 +839,9 @@ const APP_PAGE_HTML = `
       status.textContent = '链接已生成，格式：本站域名/密码/域名/文件';
       document.getElementById('gh-link').textContent = githubUrl;
       out.style.display = 'block';
+
+      // 顺手检测域名放行状态：没放行的话这个链接点开就是 400，不如当场记一笔
+      ensureAllowed(path.split('/')[0].toLowerCase());
     }
 
     let imageBusy = false;
@@ -888,6 +1020,132 @@ const APP_PAGE_HTML = `
       if (event.key === 'Enter') { event.preventDefault(); makeGithubUrl(); }
     });
 
+    // ── 三个板块的切换（纯显隐，不刷新页面） ──
+    function showTab(name) {
+      Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), button => {
+        button.classList.toggle('active', button.dataset.tab === name);
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('.tab-panel'), panel => {
+        panel.hidden = panel.dataset.panel !== name;
+      });
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), button => {
+      button.addEventListener('click', () => showTab(button.dataset.tab));
+    });
+
+    // ── 放行域名（文件下载专用，存 KV 的 download_domains） ──
+    const dlStatus = document.getElementById('dl-status');
+    const dlList = document.getElementById('dl-list');
+
+    // 从「域名」或「完整链接」里取主机名；取不出像域名的东西就返回空串
+    function normalizeDomain(value) {
+      // 模板字符串里别写 \/ 转义（会被吞掉），点也要写成字符类 [.]
+      let text = String(value || '').trim().toLowerCase().replace(/^https?:[/]{2}/i, '');
+      text = text.replace(/^[/]+/, '').split('/')[0].split('?')[0].split('#')[0].split(':')[0];
+      return /^[^/]+[.][^/]+$/.test(text) ? text : '';
+    }
+
+    function renderDownloadDomains() {
+      dlList.replaceChildren();
+
+      if (downloadDomains.length === 0) {
+        dlList.appendChild(makeText('还没有放行任何域名。GitHub 与各 Docker 仓库的域名是内置的，不受这里影响。',
+          'color:#6b7280;font-size:13px;'));
+        return;
+      }
+
+      downloadDomains.forEach(domain => {
+        const row = document.createElement('div');
+        row.className = 'domain-item flex flex-row justify-between items-center gap-3 p-3 border border-gray-200 rounded-lg';
+
+        const name = document.createElement('div');
+        name.className = 'text-gray-700 font-medium flex-1 min-w-0';
+        name.style.wordBreak = 'break-all';
+        name.textContent = domain;
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'text-red-500 hover:text-red-700 px-3 py-1 rounded hover:bg-red-50 flex-none';
+        remove.textContent = '删除';
+        remove.onclick = () => removeDownloadDomain(domain);
+
+        row.appendChild(name);
+        row.appendChild(remove);
+        dlList.appendChild(row);
+      });
+    }
+
+    // 写 KV，成功返回 { ok: true }，失败返回 { error }
+    async function updateDownloadDomains(payload) {
+      try {
+        const res = await fetch('/api/download-domains?pwd=' + encodeURIComponent(PWD), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) return { error: data.error || ('HTTP ' + res.status) };
+        downloadDomains = data.domains || [];
+        renderDownloadDomains();
+        return { ok: true };
+      } catch (error) {
+        return { error: error.message };
+      }
+    }
+
+    function addDownloadDomains(domains) {
+      return updateDownloadDomains({ action: 'add', domains: domains });
+    }
+
+    async function removeDownloadDomain(domain) {
+      dlStatus.textContent = '删除中…';
+      const result = await updateDownloadDomains({ action: 'remove', domain: domain });
+      dlStatus.textContent = result.error ? ('删除失败：' + result.error) : ('已删除 ' + domain);
+    }
+
+    // 生成链接时顺手检测：这个域名放行了没。内置域名本来就能用，不进这份名单。
+    async function ensureAllowed(domain) {
+      if (!domain || BUILTIN_DOMAINS.includes(domain) || downloadDomains.includes(domain)) return;
+
+      const status = document.getElementById('gh-status');
+      const result = await addDownloadDomains([domain]);
+      status.textContent = result.error
+        ? ('链接已生成，但自动放行 ' + domain + ' 失败：' + result.error + '（到「放行域名」里手动加）')
+        : ('链接已生成。' + domain + ' 之前没放行，已自动加进放行列表（可在下方删掉）。');
+    }
+
+    document.getElementById('dl-add').addEventListener('click', async () => {
+      const input = document.getElementById('dl-domain');
+      const domain = normalizeDomain(input.value);
+
+      if (!domain) {
+        dlStatus.textContent = '请输入域名，例如 mirrors.sdu.edu.cn（也可以直接粘完整链接）';
+        return;
+      }
+      if (downloadDomains.includes(domain)) {
+        dlStatus.textContent = domain + ' 已经在列表里了';
+        return;
+      }
+
+      dlStatus.textContent = '添加中…';
+      const result = await addDownloadDomains([domain]);
+      if (result.error) {
+        dlStatus.textContent = '添加失败：' + result.error;
+        return;
+      }
+      input.value = '';
+      dlStatus.textContent = BUILTIN_DOMAINS.includes(domain)
+        ? (domain + ' 是内置域名，本来就能用；已一并记进列表')
+        : ('已放行 ' + domain + '，现在可以拼链接下载了');
+    });
+
+    document.getElementById('dl-domain').addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); document.getElementById('dl-add').click(); }
+    });
+
+    renderDownloadDomains();
+
   </script>
 </body>
 </html>
@@ -1032,6 +1290,16 @@ async function handleRequest1js(request, redirectCount = 0) {
     return new Response('Invalid request: target domain or path required\n', { status: 400 });
   }
 
+  // 放行名单三份取并集：代码内置的 + 站点分组 + 文件下载放行。
+  // 多出来的第三份（download_domains）除了放行，也让路径首段能被认出来 ——
+  // 不认的话 mirrors.sdu.edu.cn/xxx 这种会被当成 Docker 镜像名，直接 404。
+  const domainWhitelist = await getDomainWhitelist();
+  const downloadDomains = await getDownloadDomains();
+  const isAllowedDomain = domain =>
+    ALLOWED_HOSTS.includes(domain) ||
+    domainWhitelist.includes(domain) ||
+    downloadDomains.includes(domain);
+
   let targetDomain, targetPath, isDockerRequest = false;
 
   // 检查路径是否以 https:// 或 http:// 开头
@@ -1064,7 +1332,7 @@ async function handleRequest1js(request, redirectCount = 0) {
         // 处理 docker.io/amilys/embyserver 或 docker.io/library/nginx 格式
         targetPath = pathParts.slice(1).join('/');
       }
-    } else if (ALLOWED_HOSTS.includes(pathParts[0])) {
+    } else if (isAllowedDomain(pathParts[0])) {
       // Docker 镜像仓库（如 ghcr.io）或 GitHub 域名（如 github.com）
       targetDomain = pathParts[0];
       targetPath = pathParts.slice(1).join('/') + url.search;
@@ -1087,9 +1355,8 @@ async function handleRequest1js(request, redirectCount = 0) {
     }
   }
 
-  // 默认白名单检查：只允许 ALLOWED_HOSTS 中的域名
-  const domainWhitelist = await getDomainWhitelist();
-  if (!ALLOWED_HOSTS.includes(targetDomain) && !domainWhitelist.includes(targetDomain)) {
+  // 放行检查：内置域名 ∪ 站点分组 ∪ 文件下载放行，任一份里有就过
+  if (!isAllowedDomain(targetDomain)) {
     console.log(`Blocked: Domain ${targetDomain} not in allowed list`);
     return new Response(`Error: Invalid target domain.\n`, { status: 400 });
   }
@@ -1342,7 +1609,7 @@ async function isAuthenticated(request) {
 }
 
 // 渲染主界面
-function renderAppPage(groups, proxy_suffix) {
+function renderAppPage(groups, proxy_suffix, downloadDomains) {
   // 每个分组一个折叠栏（<details> 默认就是收起的），展开才看得到组里的域名
   const groupsList = groups.map(group => {
     const domainsRows = group.domains.map(domain => {
@@ -1387,9 +1654,12 @@ function renderAppPage(groups, proxy_suffix) {
     `;
   }).join('');
 
+  // 放行域名列表由页面脚本渲染（只有一份渲染逻辑，免得服务端渲染出来的按钮没绑上事件）
   // 替换模板中的占位符
   return APP_PAGE_HTML
     .replace('{{groups_list}}', groupsList)
+    .replace('{{download_domains_json}}', JSON.stringify(downloadDomains))
+    .replace('{{builtin_domains_json}}', JSON.stringify(ALLOWED_HOSTS))
     .replace('{{proxy_suffix}}', proxy_suffix);
 }
 
@@ -1588,10 +1858,58 @@ async function handleAppRequest(request) {
     return jsonResponse(await findRelatedDomains(url.searchParams.get('domain') || ''));
   }
 
+  // 文件下载的放行域名：GET 拿列表，POST 增删。用接口而不是表单，是因为
+  // 「粘链接时自动放行」得在不刷新页面的前提下写 KV（刷新会把刚生成的链接弄丢）。
+  if (url.pathname === '/api/download-domains') {
+    if (request.method === 'GET') {
+      return jsonResponse({ domains: await getDownloadDomains(), builtin: ALLOWED_HOSTS });
+    }
+    if (request.method === 'POST') {
+      let payload;
+      try {
+        payload = await request.json();
+      } catch {
+        return jsonResponse({ error: '请求体不是合法 JSON' }, 400);
+      }
+
+      const current = await getDownloadDomains();
+      let updated;
+
+      if (payload.action === 'add') {
+        const incoming = (Array.isArray(payload.domains) ? payload.domains : [])
+          .map(item => String(item).trim().toLowerCase())
+          .filter(Boolean);
+        if (incoming.length === 0) {
+          return jsonResponse({ error: '没有要添加的域名' }, 400);
+        }
+        updated = current.slice();
+        incoming.forEach(domain => { if (!updated.includes(domain)) updated.push(domain); });
+      } else if (payload.action === 'remove') {
+        const domain = String(payload.domain || '').trim().toLowerCase();
+        if (!domain) {
+          return jsonResponse({ error: '没有要删除的域名' }, 400);
+        }
+        updated = current.filter(item => item !== domain);
+      } else {
+        return jsonResponse({ error: '未知操作' }, 400);
+      }
+
+      if (!await saveDownloadDomains(updated)) {
+        return jsonResponse({ error: '写入 KV 失败（检查绑定变量名是否为 Proxy）' }, 500);
+      }
+      return jsonResponse({ domains: updated, builtin: ALLOWED_HOSTS });
+    }
+    return jsonResponse({ error: 'Method not allowed' }, 405);
+  }
+
   if (request.method === 'GET') {
     // 显示主界面
     const groups = await getSiteGroups();
-    return htmlResponse(renderAppPage(groups, getProxySuffix(request.headers.get('Host') || url.host)));
+    return htmlResponse(renderAppPage(
+      groups,
+      getProxySuffix(request.headers.get('Host') || url.host),
+      await getDownloadDomains()
+    ));
   } else if (request.method === 'POST') {
     // 处理站点分组更新
     try {
@@ -1826,7 +2144,8 @@ async function handleRequest(request, ctx) {
     // 只有控制台主机（proxy.域名、根域名这类不带 -proxy. 的）才给界面和界面自己的接口。
     // 入口只有一个 /，/admin 保留为等价入口（旧书签仍然能用），右上角已经没有任何跳转按钮了。
     if (url.pathname === '/' || url.pathname === '/admin' ||
-        url.pathname === '/api/find-domains') {
+        url.pathname === '/api/find-domains' ||
+        url.pathname === '/api/download-domains') {
       return handleAppRequest(request);
     }
 
