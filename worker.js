@@ -640,7 +640,7 @@ const APP_PAGE_HTML = `
     <div class="card p-4 sm:p-6">
       <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">放行域名</h2>
       <div class="flex flex-col sm:flex-row gap-3">
-        <input type="text" id="dl-domain" placeholder="mirrors.sdu.edu.cn"
+        <input type="text" id="dl-domain" placeholder="还没有放行任何域名。GitHub 与各 Docker 仓库的域名是内置的，不受这里影响。"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button type="button" id="dl-add" class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
           添加
@@ -1048,12 +1048,6 @@ const APP_PAGE_HTML = `
 
     function renderDownloadDomains() {
       dlList.replaceChildren();
-
-      if (downloadDomains.length === 0) {
-        dlList.appendChild(makeText('还没有放行任何域名。GitHub 与各 Docker 仓库的域名是内置的，不受这里影响。',
-          'color:#6b7280;font-size:13px;'));
-        return;
-      }
 
       downloadDomains.forEach(domain => {
         const row = document.createElement('div');
