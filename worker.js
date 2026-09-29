@@ -1,18 +1,3 @@
-// 白名单存储结构（KV key = site_groups）：
-//   [{ name: 'GitHub', domains: ['github.com', ...] }, ...]
-// 这里不再内置任何放行域名 —— 白名单完全由管理页面录入决定，KV 里没有数据就是空白名单。
-// 唯一的例外是下面的 ALLOWED_HOSTS（Docker 仓库 + GitHub 几个主干域名，代码级基础设施）。
-
-// KV空间绑定（需要在Cloudflare Worker设置中配置）
-// 绑定名称：Proxy。面板 → 设置 → 绑定 → KV 命名空间，变量名必须填 Proxy，没有别名。
-
-// KV 绑定名，只有一个：Proxy。
-//
-// 关键点：绝对不要用 `typeof Proxy !== 'undefined'` 判断绑定是否存在 ——
-// Proxy 是 JS 内置构造器，这个判断恒为真。绑定没注入时就会在 Proxy.get(...) 直接抛异常，
-// 于是**每个请求都抛一次并写一条 error 日志**，既白费 CPU，又把 Workers Logs 免费额度（20 万事件/天）吃掉一半。
-// 所以这里改成特性检测：内置 Proxy 构造器上只有 revocable，没有 get/put，天然被排除掉；
-// 只有面板真的把 KV 命名空间注入到 globalThis.Proxy 上，它才会被认出来。
 const KV_BINDING_NAME = 'Proxy';
 
 function getKV() {
@@ -343,22 +328,6 @@ async function getDomainMappings() {
   );
 }
 
-// ALLOWED_HOSTS: 定义允许代理的域名列表（默认白名单）。
-const ALLOWED_HOSTS = [
-  'quay.io',
-  'gcr.io',
-  'k8s.gcr.io',
-  'registry.k8s.io',
-  'ghcr.io',
-  'docker.cloudsmith.io',
-  'registry-1.docker.io',
-  'github.com',
-  'api.github.com',
-  'raw.githubusercontent.com',
-  'gist.github.com',
-  'gist.githubusercontent.com'
-];
-
 // RESTRICT_PATHS: 控制是否限制 GitHub 和 Docker 请求的路径。
 const RESTRICT_PATHS = false;
 
@@ -570,7 +539,7 @@ const APP_PAGE_HTML = `
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
       <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">Docker 镜像查询</h2>
       <div class="flex flex-col sm:flex-row gap-3">
-        <input type="text" id="image-query" placeholder="镜像名（例如：nginx / bitnami/nginx / openlistteam/openlist）"
+        <input type="text" id="image-query" placeholder="官方镜像写名字即可（nginx）；组织镜像必须写全组织/镜像（如 openlistteam/openlist）； 其他仓库写主机名（如 ghcr.io/用户名/镜像）"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button type="button" id="image-btn" class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
           查询
@@ -1062,6 +1031,10 @@ async function handleRequest1js(request, redirectCount = 0) {
     return new Response('Invalid request: target domain or path required\n', { status: 400 });
   }
 
+  // 允许代理哪些域名，只认 KV 里那一份（界面「站点分组」维护的）。
+  // 代码里不再内置任何域名 —— 包括 github.com 和各个 Docker 仓库，都得自己在界面上加。
+  const domainWhitelist = await getDomainWhitelist();
+
   let targetDomain, targetPath, isDockerRequest = false;
 
   // 检查路径是否以 https:// 或 http:// 开头
@@ -1094,7 +1067,7 @@ async function handleRequest1js(request, redirectCount = 0) {
         // 处理 docker.io/amilys/embyserver 或 docker.io/library/nginx 格式
         targetPath = pathParts.slice(1).join('/');
       }
-    } else if (ALLOWED_HOSTS.includes(pathParts[0])) {
+    } else if (domainWhitelist.includes(pathParts[0])) {
       // Docker 镜像仓库（如 ghcr.io）或 GitHub 域名（如 github.com）
       targetDomain = pathParts[0];
       targetPath = pathParts.slice(1).join('/') + url.search;
@@ -1117,9 +1090,8 @@ async function handleRequest1js(request, redirectCount = 0) {
     }
   }
 
-  // 默认白名单检查：只允许 ALLOWED_HOSTS 中的域名
-  const domainWhitelist = await getDomainWhitelist();
-  if (!ALLOWED_HOSTS.includes(targetDomain) && !domainWhitelist.includes(targetDomain)) {
+  // 白名单检查：不在 KV 里登记的域名一律拒绝
+  if (!domainWhitelist.includes(targetDomain)) {
     console.log(`Blocked: Domain ${targetDomain} not in allowed list`);
     return new Response(`Error: Invalid target domain.\n`, { status: 400 });
   }

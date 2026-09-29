@@ -103,6 +103,15 @@ https://proxy.你的域名/密码/github.com/用户名/仓库/releases/download/
 
 KV 里没有 `site_groups` 就是**空白名单**，代码不带任何内置域名 —— 代理谁由你自己加。
 
+**这份名单是唯一的放行依据。** 部署完什么都不加的话，GitHub 和 Docker 加速都会返回
+`Error: Invalid target domain.`。至少先把下面这些加上：
+
+| 用途 | 要加的域名 |
+| --- | --- |
+| GitHub 文件加速 | `github.com`（`raw.githubusercontent.com`、`gist.githubusercontent.com` 等按需再补） |
+| Docker Hub 官方镜像 | `registry-1.docker.io` |
+| 其他镜像仓库 | `ghcr.io` / `quay.io` / `gcr.io` / `registry.k8s.io` / `docker.cloudsmith.io`，用到哪个加哪个 |
+
 ---
 
 ## 三、用法
