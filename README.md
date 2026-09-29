@@ -92,7 +92,7 @@ https://你的域名/密码/github.com/用户名/仓库/releases/download/v1.0.0
 - 每行右侧**删除**；改动立刻写 KV，当前实例立即生效，其他边缘节点最多滞后 60 秒
 - 内置的 12 个域名（见「站点分组」）不在这份列表里，也不用加
 
-### Docker 拉取 · 镜像查询
+### 镜像拉取 · 镜像查询
 
 输入镜像名 → 直接去镜像仓库取**真实 tag 列表**，选好 tag 后复制 `docker pull` 命令。
 
@@ -100,12 +100,6 @@ https://你的域名/密码/github.com/用户名/仓库/releases/download/v1.0.0
 - 组织镜像必须写全：`openlistteam/openlist`
 - 其他仓库带主机名：`ghcr.io/用户名/镜像`
 
-查询只认**完整仓库名**，没有关键词模糊搜索。曾经做过一条（Docker Hub 的 `search/v4` 端点 + 自填凭据），
-2026-09-29 整条删掉了：那个搜索接口按出口 IP 做 abuse 限流，而 Worker 的出口 IP 是共享的，
-连拿凭据换 token 的那一步（`POST hub.docker.com/v2/auth/token`）都直接 429 ——
-请求在「你的账号是谁」被判定之前就被挡掉，凭据填了也救不回来，属于「点了必然报错」的功能。
-
-要模糊搜就去 hub.docker.com 网站自己搜，拿到 `组织/镜像` 再回这里查 tag。
 
 ### 域名代理 · 添加站点
 
@@ -120,55 +114,7 @@ https://你的域名/密码/github.com/用户名/仓库/releases/download/v1.0.0
 
 每个分组一个折叠栏（默认折叠），展开后可以删单个域名，或删掉整个分组。
 
-放行名单是**三份取并集**：
 
-- **代码内置**（`ALLOWED_HOSTS`，见「代码里的开关」）：`github.com`、`api.github.com`、
-  `raw.githubusercontent.com`、`gist.github.com`、`gist.githubusercontent.com`、
-  `registry-1.docker.io`、`ghcr.io`、`quay.io`、`gcr.io`、`k8s.gcr.io`、`registry.k8s.io`、
-  `docker.cloudsmith.io` —— 这 12 个不用自己加，开箱就能用。
-- **KV 里的 `site_groups`**：就是你在这一页加的那些；KV 没有数据时这份为空，但不影响上面那份。
-- **KV 里的 `download_domains`**：就是「文件下载」板块加的那些。
-
-所以部署完什么都不加，GitHub 和 Docker 照样能通；要代理**别的**站点，在「文件下载」里粘一次链接就会自动放行。
-
-**两种写法都认这三份名单**：
-
-- 路径形式 `代理域名/密码/目标域名/文件` —— 自己加的域名也能直接拼，不必走主机名写法
-- 主机名形式 `目标域名-换成横线-你的域名` —— 这条**只认 `site_groups`**，`download_domains` 不参与
-  （它只做放行，不参与域名映射和正文改写）
 
 ---
-
-## 三、用法
-
-### GitHub 文件加速
-
-在原始链接前面加上 `本站域名/密码/`：
-
-```
-原始：https://github.com/用户名/仓库/releases/download/v1.0.0/file.zip
-加速：https://你的域名/密码/github.com/用户名/仓库/releases/download/v1.0.0/file.zip
-```
-
-### Docker 镜像
-
-```bash
-# Docker Hub 官方镜像（不加主机名）
-docker pull 你的域名/密码/nginx:latest
-
-# 其他仓库（必须带主机名，否则 docker 会跑去 Hub 找一个不存在的名字）
-docker pull 你的域名/密码/ghcr.io/用户名/镜像:标签
-```
-
-### GitHub 站点反代
-
-代理主机名 = 原域名**点换成横线** + `-的域名后缀`：
-
-```
-github.com        →  github-com-你的域名
-api.github.com    →  api-github-com-你的域名
-raw.githubusercontent.com → raw-githubusercontent-com-你的域名
-```
-
-响应正文里的域名引用会被自动改写成对应的代理域名，所以页面里的相对链接、头像、静态资源都能正常加载。
 
