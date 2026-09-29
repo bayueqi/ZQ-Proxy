@@ -609,7 +609,7 @@ const APP_PAGE_HTML = `
     <!-- 三个板块：纯前端显隐（不刷新页面，刷新会把刚生成的链接和查询结果丢掉） -->
     <div class="tab-bar">
       <button type="button" class="tab-btn active" data-tab="download">文件下载</button>
-      <button type="button" class="tab-btn" data-tab="docker">Docker 拉取</button>
+      <button type="button" class="tab-btn" data-tab="docker">镜像拉取</button>
       <button type="button" class="tab-btn" data-tab="domains">域名代理</button>
     </div>
 
@@ -618,9 +618,9 @@ const APP_PAGE_HTML = `
 
     <!-- GitHub 文件加速：一个输入框，把 github.com/... 的路径整段粘进来就行。密码用登录的那个，不单独填 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
-      <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">GitHub 文件加速</h2>
+      <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">文件输入</h2>
       <div class="flex flex-col sm:flex-row gap-3">
-        <input type="text" id="gh-path" placeholder="github.com/user/repo/releases/download/v1.0.0/a.zip"
+        <input type="text" id="gh-path" placeholder="文件名称（例如：github.com/user/repo/releases/download/v1.0.0/a.zip）"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button type="button" id="gh-btn" class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
           生成
@@ -640,7 +640,7 @@ const APP_PAGE_HTML = `
     <div class="card p-4 sm:p-6">
       <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">放行域名</h2>
       <div class="flex flex-col sm:flex-row gap-3">
-        <input type="text" id="dl-domain" placeholder="还没有放行任何域名。GitHub 与各 Docker 仓库的域名是内置的，不受这里影响。"
+        <input type="text" id="dl-domain" placeholder="GitHub与各Docker仓库的域名默认放行"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button type="button" id="dl-add" class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
           添加
@@ -657,7 +657,7 @@ const APP_PAGE_HTML = `
 
     <!-- 镜像查询 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
-      <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">Docker 镜像查询</h2>
+      <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">镜像查询</h2>
       <div class="flex flex-col sm:flex-row gap-3">
         <input type="text" id="image-query" placeholder="官方镜像写名字即可（nginx）；组织镜像必须写全组织/镜像（如 openlistteam/openlist）； 其他仓库写主机名（如 ghcr.io/用户名/镜像）"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -878,7 +878,8 @@ const APP_PAGE_HTML = `
     function renderImage(box, data) {
       const target = pullTarget(data.host, data.repo);
       const isOfficial = data.host === 'registry-1.docker.io' && data.repo.indexOf('library/') === 0;
-      const tags = data.tags || [];
+      const tags = (data.tags || []).slice();
+      let next = data.next || '';
       // 用户自己写的 tag 优先（nginx:1.25 这种别被换成 latest），其次 latest，最后取上游第一个
       let tag = (data.requestedTag && tags.indexOf(data.requestedTag) >= 0) ? data.requestedTag
         : (tags.indexOf('latest') >= 0 ? 'latest' : (tags[0] || 'latest'));
@@ -892,9 +893,8 @@ const APP_PAGE_HTML = `
       info.className = 'res-main';
       info.appendChild(makeText(target + (isOfficial ? ' · 官方镜像' : ''),
         'display:block;color:#374151;font-weight:500;'));
-      info.appendChild(makeText('来源仓库 ' + data.host + ' · 可用 tag ' + tags.length + ' 个'
-        + (data.truncated ? '（上游还有更多，这里只取了前 500 个）' : ''),
-        'display:block;color:#9ca3af;font-size:12px;'));
+      const meta = makeText('', 'display:block;color:#9ca3af;font-size:12px;');
+      info.appendChild(meta);
       info.appendChild(command);
 
       const copy = makeButton('复制命令', () => copyWithFeedback(command.textContent, copy));
@@ -909,35 +909,83 @@ const APP_PAGE_HTML = `
       const details = document.createElement('details');
       details.style.cssText = 'margin-top:8px;border:1px solid #e5e7eb;border-radius:8px;padding:10px;';
       const summary = document.createElement('summary');
-      summary.textContent = '可用 tag（' + tags.length + ' 个）';
       summary.style.cssText = 'cursor:pointer;color:#374151;font-size:14px;';
       details.appendChild(summary);
 
       const list = document.createElement('div');
       list.className = 'tag-list';
 
-      tags.forEach(name => {
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.textContent = name;
-        const active = name === tag;
-        chip.className = 'tag-chip';
-        chip.style.cssText = 'border:1px solid ' + (active ? '#1d4ed8' : '#e5e7eb') +
-          ';background:' + (active ? '#eff6ff' : '#ffffff') + ';color:#374151;';
-        chip.onclick = () => {
-          tag = name;
-          refresh();
-          Array.prototype.forEach.call(list.children, child => {
-            child.style.borderColor = '#e5e7eb';
-            child.style.background = '#ffffff';
-          });
-          chip.style.borderColor = '#1d4ed8';
-          chip.style.background = '#eff6ff';
-        };
-        list.appendChild(chip);
-      });
+      // 计数写在两处（卡片那行灰字 + 折叠栏标题），加完 tag 一起刷新
+      const syncCounts = () => {
+        meta.textContent = '来源仓库 ' + data.host + ' · 已列出 ' + tags.length + ' 个 tag';
+        summary.textContent = '可用 tag（' + tags.length + ' 个）';
+      };
 
+      const addChips = names => {
+        names.forEach(name => {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.textContent = name;
+          const active = name === tag;
+          chip.className = 'tag-chip';
+          chip.style.cssText = 'border:1px solid ' + (active ? '#1d4ed8' : '#e5e7eb') +
+            ';background:' + (active ? '#eff6ff' : '#ffffff') + ';color:#374151;';
+          chip.onclick = () => {
+            tag = name;
+            refresh();
+            Array.prototype.forEach.call(list.children, child => {
+              child.style.borderColor = '#e5e7eb';
+              child.style.background = '#ffffff';
+            });
+            chip.style.borderColor = '#1d4ed8';
+            chip.style.background = '#eff6ff';
+          };
+          list.appendChild(chip);
+        });
+      };
+
+      addChips(tags);
+      syncCounts();
       details.appendChild(list);
+
+      // 上游一页最多 500 个，还有下一页时给个「加载更多」，取完了按钮自己消失
+      let busy = false;
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.textContent = '加载更多';
+      more.className = 'mt-3 bg-gray-200 text-gray-800 px-3 py-1 rounded-lg hover:bg-gray-300 transition';
+      more.onclick = async () => {
+        if (busy || !next) return;
+        busy = true;
+        more.disabled = true;
+        more.textContent = '加载中…';
+        try {
+          const res = await fetch('/api/image-search?q=' + encodeURIComponent(data.query || '') +
+            '&last=' + encodeURIComponent(next) + '&pwd=' + encodeURIComponent(PWD));
+          const page = await res.json();
+          if (!res.ok) throw new Error((page && page.error) || ('HTTP ' + res.status));
+
+          const fresh = page.kind === 'image' ? (page.tags || []) : [];
+          // 上游分页偶有重叠，按已有的去个重，免得越点越重复
+          const seen = {};
+          tags.forEach(name => { seen[name] = true; });
+          const added = fresh.filter(name => !seen[name]);
+          tags.push.apply(tags, added);
+          addChips(added);
+          next = page.next || '';
+          syncCounts();
+
+          if (next) { more.disabled = false; more.textContent = '加载更多'; }
+          else more.remove();
+        } catch (error) {
+          more.disabled = false;
+          more.textContent = '加载失败，重试';
+        } finally {
+          busy = false;
+        }
+      };
+      if (next) details.appendChild(more);
+
       box.appendChild(details);
     }
 
@@ -2017,9 +2065,11 @@ function parseImageInput(input) {
 
 // 取某个仓库的 tag 列表。401 时按 WWW-Authenticate 换匿名 token 再来一次
 // （复用容器路径那个 handleToken，它自带 isolate 级缓存）。
-// n=500 是上游单页上限，再多它会给 Link 头分页，这里只取第一页并如实标注。
-async function fetchRepoTags(host, repo) {
-  const target = `https://${host}/v2/${repo}/tags/list?n=500`;
+// 上游单页最多给 500 个，还有更多时会在 Link 头里给出下一页的起点（last 参数），
+// 这里把那个值原样带回给前端；界面上的「加载更多」拿着它续取下一页。
+async function fetchRepoTags(host, repo, last) {
+  const target = `https://${host}/v2/${repo}/tags/list?n=500` +
+    (last ? `&last=${encodeURIComponent(last)}` : '');
   const headers = { 'Accept': 'application/json', 'User-Agent': 'ZQ-Proxy/1.0' };
 
   let response;
@@ -2053,9 +2103,13 @@ async function fetchRepoTags(host, repo) {
   const data = await response.json().catch(() => null);
   if (!data) return { error: '返回的不是 JSON' };
 
+  // Link 头形如 </v2/library/nginx/tags/list?last=1.25.3&n=500>; rel="next"
+  const link = response.headers.get('Link') || '';
+  const nextMatch = link.match(/[?&]last=([^&>]+)/);
+
   return {
     tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
-    truncated: !!response.headers.get('Link')
+    next: nextMatch ? decodeURIComponent(nextMatch[1]) : ''
   };
 }
 
@@ -2073,20 +2127,24 @@ async function handleImageSearch(request, ctx) {
   const query = (url.searchParams.get('q') || '').trim();
   if (!query) return jsonResponse({ error: '缺少查询词 q' });
 
+  // 翻页游标：界面上点「加载更多」时带上上一页 Link 头里的 last
+  const last = (url.searchParams.get('last') || '').trim();
+
   const parsed = parseImageInput(query);
   const failures = [];
 
   // 直接问仓库要 tag，完全不碰 hub.docker.com
   if (!parsed.error) {
     const cacheKey = new Request(new URL(
-      `/__cache/image-tags?h=${parsed.host}&r=${encodeURIComponent(parsed.repos.join(','))}`, request.url));
+      `/__cache/image-tags?h=${parsed.host}&r=${encodeURIComponent(parsed.repos.join(','))}` +
+      `&last=${encodeURIComponent(last)}`, request.url));
     const cache = caches.default;
 
     const hit = await cache.match(cacheKey);
     if (hit) return hit;
 
     for (const repo of parsed.repos) {
-      const result = await fetchRepoTags(parsed.host, repo);
+      const result = await fetchRepoTags(parsed.host, repo, last);
       if (result.error) { failures.push(`${parsed.host}/${repo}: ${result.error}`); continue; }
       if (result.missing) {
         failures.push(`${parsed.host}/${repo}: ${result.denied ? '仓库不存在（或私有，没权限看）' : '仓库不存在'}`);
@@ -2098,10 +2156,13 @@ async function handleImageSearch(request, ctx) {
         kind: 'image',
         host: parsed.host,
         repo,
+        // 原样带回查询词，前端「加载更多」续页时要用它再问一次
+        query,
         requestedTag: parsed.tag || '',
         // latest 置顶：tags/list 不给更新时间，上游那串顺序对挑 tag 没帮助
         tags: tags.includes('latest') ? ['latest', ...tags.filter(tag => tag !== 'latest')] : tags,
-        truncated: !!result.truncated
+        // 非空表示上游还有下一页，值就是下一页的 last 游标
+        next: result.next || ''
       }, 200, true);
       if (ctx) ctx.waitUntil(cache.put(cacheKey, response.clone()));
       return response;
