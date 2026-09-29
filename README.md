@@ -38,8 +38,8 @@ Worker → 设置 → 绑定 → 添加 KV 命名空间，**变量名 `Proxy`**�
 
 ### 4. DNS
 
-给 `*.你的域名` 加一条 A 记录（IP 随便填，比如 `192.0.2.1`）并**打开小云朵代理**。
-不打算用泛域名的话，至少要有 `proxy.你的域名` 与 `*.proxy.你的域名`。
+给 `*.你的域名` 加一条 A 记录（IP 要填写cloudfalre自己的ip`）。
+
 
 ### 5. 路由
 
@@ -47,14 +47,13 @@ Worker → 设置 → 触发器 → 路由，加上：
 
 | 路由 | 作用 |
 | --- | --- |
-| `proxy.你的域名/*` | 控制台界面与它的接口 |
-| `*-proxy.你的域名/*` | GitHub 各子域的反代入口 |
+| `你的域名/*` | 控制台界面与它的接口 |
+| `*-你的域名/*` | 各子域的反代入口 |
 
-嫌麻烦就只加一条 `*.你的域名/*` 覆盖上述两者。
 
 ### 6. 首次访问
 
-打开 `https://proxy.你的域名/`：
+打开 `https://你的域名/`：
 
 - KV 里没有密码 → 显示**设置密码**页（至少 6 位），设完自动带密码跳进控制台
 - 有密码 → 显示**登录**页，输入后进控制台
@@ -63,13 +62,13 @@ Worker → 设置 → 触发器 → 路由，加上：
 
 ## 二、控制台
 
-访问 `https://proxy.你的域名/`（`/admin` 是等价入口，旧书签仍可用）。
+访问 `https://你的域名/`（`/admin` 是等价入口，旧书签仍可用）。
 界面分三个板块，点顶部标题切换 —— 切换是纯前端显隐，不刷新页面，所以刚生成的链接和查询结果不会丢：
 
 | 板块 | 装什么 |
 | --- | --- |
 | **文件下载** | 加速链接生成 + 放行域名管理 |
-| **Docker 拉取** | 镜像查询与真实 tag 列表 |
+| **镜像拉取** | 镜像查询与真实 tag 列表 |
 | **域名代理** | 添加站点 + 站点分组 |
 
 ### 文件下载 · 加速链接
@@ -78,7 +77,7 @@ Worker → 设置 → 触发器 → 路由，加上：
 密码自动用当前登录的那个，不用再填。生成形如下面的链接，可直接复制或打开：
 
 ```
-https://proxy.你的域名/密码/github.com/用户名/仓库/releases/download/v1.0.0/file.zip
+https://你的域名/密码/github.com/用户名/仓库/releases/download/v1.0.0/file.zip
 ```
 
 这个框**不认域名**，任何已放行的站点都能拼。粘进来的域名如果**不在放行名单里**，
@@ -135,7 +134,7 @@ https://proxy.你的域名/密码/github.com/用户名/仓库/releases/download/
 **两种写法都认这三份名单**：
 
 - 路径形式 `代理域名/密码/目标域名/文件` —— 自己加的域名也能直接拼，不必走主机名写法
-- 主机名形式 `目标域名-换成横线-proxy.你的域名` —— 这条**只认 `site_groups`**，`download_domains` 不参与
+- 主机名形式 `目标域名-换成横线-你的域名` —— 这条**只认 `site_groups`**，`download_domains` 不参与
   （它只做放行，不参与域名映射和正文改写）
 
 ---
@@ -148,80 +147,28 @@ https://proxy.你的域名/密码/github.com/用户名/仓库/releases/download/
 
 ```
 原始：https://github.com/用户名/仓库/releases/download/v1.0.0/file.zip
-加速：https://proxy.你的域名/密码/github.com/用户名/仓库/releases/download/v1.0.0/file.zip
+加速：https://你的域名/密码/github.com/用户名/仓库/releases/download/v1.0.0/file.zip
 ```
 
 ### Docker 镜像
 
 ```bash
 # Docker Hub 官方镜像（不加主机名）
-docker pull proxy.你的域名/密码/nginx:latest
+docker pull 你的域名/密码/nginx:latest
 
 # 其他仓库（必须带主机名，否则 docker 会跑去 Hub 找一个不存在的名字）
-docker pull proxy.你的域名/密码/ghcr.io/用户名/镜像:标签
+docker pull 你的域名/密码/ghcr.io/用户名/镜像:标签
 ```
 
 ### GitHub 站点反代
 
-代理主机名 = 原域名**点换成横线** + `-proxy.` + 你的域名后缀：
+代理主机名 = 原域名**点换成横线** + `-的域名后缀`：
 
 ```
-github.com        →  github-com-proxy.你的域名
-api.github.com    →  api-github-com-proxy.你的域名
-raw.githubusercontent.com → raw-githubusercontent-com-proxy.你的域名
+github.com        →  github-com-你的域名
+api.github.com    →  api-github-com-你的域名
+raw.githubusercontent.com → raw-githubusercontent-com-你的域名
 ```
 
 响应正文里的域名引用会被自动改写成对应的代理域名，所以页面里的相对链接、头像、静态资源都能正常加载。
 
-### 密码
-
-一个密码同时管两件事：进控制台（`?pwd=`）和所有加速链接（路径第一段）。
-所以**拿得到链接 = 被允许用这个代理**。路径第一段对不上会返回 401
-（Docker 客户端收到的是纯文本 `unauthorized`）。
-
-密码在页面与链接中都以 `encodeURIComponent` 编码后传递，所以密码里带 `/` 之类的字符也不会截断路径。
-
----
-
-## 四、代码里的开关
-
-| 常量 | 位置 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `KV_BINDING_NAME` | 顶部 | `'Proxy'` | KV 绑定变量名，改了记得同步面板里的绑定名 |
-| `RESTRICT_PATHS` | 顶部 | `false` | 是否限制 GitHub / Docker 的请求路径 |
-| `ALLOWED_PATHS` | 顶部 | `['library', ...]` | `RESTRICT_PATHS` 打开时生效的路径关键字 |
-| `ALLOWED_HOSTS` | 顶部 | 12 个常用域名 | 代码内置的放行白名单（各 Docker registry + GitHub 主干域名），与 KV 的 `site_groups`、`download_domains` **三份取并集** |
-| `DOCKER_BLOB_DIRECT` | 顶部 | `false` | 镜像层是否改成 302 直连源站 CDN。打开能大幅降低 Worker 请求数，**前提是客户端能直连该 CDN** —— 打开前先本机 `docker pull` 验一次 |
-| `STATIC_CACHE` 等 | 顶部 | 见注释 | 按内容类型分级设置的浏览器缓存策略 |
-
-代码里没有内置的「站点 → 关联域名」对照表（放行用的 `ALLOWED_HOSTS` 除外），关联域名一律靠扫描现取。
-
----
-
-## 五、限制
-
-- 不支持 GitHub 的登录 / 注册（相关路径会被重定向出去）
-- 部分依赖 WebSocket 或特殊认证的 GitHub 功能不可用
-- Docker Hub 没有关键词模糊搜索（上游按共享出口 IP 限流，做不了），只能按完整仓库名查 tag
-- 关联域名扫描只覆盖首页 HTML + CSP 头 + 同站脚本，动态请求的接口域名抓不到
-- 白名单为空时，`*-proxy.` 主机不会代理任何站点
-
----
-
-## 六、排查
-
-| 现象 | 原因 / 处理 |
-| --- | --- |
-| 保存站点或设密码时提示 KV 未绑定 | 绑定变量名不是 `Proxy`，或没绑定 |
-| 加速链接返回 401 | 链接第一段不是密码，或密码被 URL 编码后不一致 |
-| `docker pull` 报 `unauthorized` | 同上，密码段漏了或写错 |
-| 打开页面版式简陋、无样式 | 页面样式走 Tailwind CDN，网络不通时退化，功能不受影响 |
-| 镜像查询说「没找到」 | 名字不完整。组织镜像必须写成 `组织/镜像`（如 `openlistteam/openlist`），只有官方镜像可以只写名字 |
-| 某个域名没被放行 | 它在 KV 的 `site_groups` 或 `download_domains` 里吗？新加的域名有 60 秒内存缓存 |
-| 加了域名还是要自己拼链接才慢 | 正常 —— 主机名写法（`xxx-proxy.你的域名`）只认 `site_groups`，和 `download_domains` 无关 |
-
----
-
-## 免责声明
-
-本项目仅用于学习与研究。使用者需自行确保遵守 GitHub、Docker 的服务条款以及所在地法律法规。
