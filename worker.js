@@ -546,17 +546,15 @@ const APP_PAGE_HTML = `
   <div class="container mx-auto px-3 sm:px-4 py-6 sm:py-8">
     <h1 class="text-2xl sm:text-3xl font-bold mb-5 sm:mb-6 text-center text-gray-800">ZQ-Proxy</h1>
 
-    <!-- GitHub 文件加速：域名 + 文件。密码用的是登录进来的那个，不再单独填 -->
+    <!-- GitHub 文件加速：一个输入框，把 github.com/... 的路径整段粘进来就行。密码用登录的那个，不单独填 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
       <h2 class="text-lg sm:text-xl font-semibold mb-2 text-gray-700">GitHub 文件加速</h2>
       <p class="text-sm text-gray-500 mb-4">
-        填域名和文件，拼出来的链接形如 <code>https://本站域名/密码/github.com/文件</code>；
+        粘贴原链接（也可以只贴路径），拼出来的链接形如 <code>https://本站域名/密码/github.com/文件</code>；
         密码就是你现在登录用的这个，别人拿到链接直接就能下。
       </p>
       <div class="flex flex-col sm:flex-row gap-3">
-        <input type="text" id="gh-domain" placeholder="域名（例如 github.com）"
-               class="sm:w-56 sm:flex-none p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <input type="text" id="gh-file" placeholder="文件（例如 user/repo/releases/download/v1/a.zip）"
+        <input type="text" id="gh-path" placeholder="github.com/user/repo/releases/download/v1.0.0/a.zip"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button type="button" id="gh-btn" class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
           生成
@@ -725,23 +723,29 @@ const APP_PAGE_HTML = `
       return location.hostname + '/' + encodeURIComponent(PWD) + '/';
     }
 
-    // ── GitHub 文件加速：域名 + 文件（密码取自当前登录，不再单独填） ──
+    // ── GitHub 文件加速：粘一段 github.com/... 的路径即可（密码取自当前登录，不单独填） ──
     let githubUrl = '';
 
     function makeGithubUrl() {
-      const domain = document.getElementById('gh-domain').value.trim()
-        .replace(/^https?:[/]{2}/i, '').replace(/[/]+$/, '');
-      const file = document.getElementById('gh-file').value.trim().replace(/^[/]+/, '');
+      // 允许直接粘完整链接：剥掉协议和首尾多余的斜杠
+      const path = document.getElementById('gh-path').value.trim()
+        .replace(/^https?:[/]{2}/i, '').replace(/^[/]+/, '').replace(/[/]+$/, '');
       const status = document.getElementById('gh-status');
       const out = document.getElementById('gh-out');
 
-      if (!domain || !file) {
-        status.textContent = '域名和文件都要填';
+      if (!path) {
+        status.textContent = '要填 GitHub 的路径，例如 github.com/user/repo/releases/download/v1/a.zip';
+        out.style.display = 'none';
+        return;
+      }
+      // 第一段得是个域名，否则拼出来是个残链接（例如只贴了 user/repo/...）
+      if (!/^[^/]+[.][^/]+/.test(path)) {
+        status.textContent = '第一段要是域名，例如 github.com/user/repo/releases/download/v1/a.zip';
         out.style.display = 'none';
         return;
       }
 
-      githubUrl = 'https://' + pullPrefix() + domain + '/' + file;
+      githubUrl = 'https://' + pullPrefix() + path;
       status.textContent = '链接已生成，格式：本站域名/密码/域名/文件';
       document.getElementById('gh-link').textContent = githubUrl;
       out.style.display = 'block';
@@ -920,7 +924,7 @@ const APP_PAGE_HTML = `
     document.getElementById('gh-open').addEventListener('click', () => {
       if (githubUrl) window.open(githubUrl, '_blank');
     });
-    document.getElementById('gh-file').addEventListener('keydown', event => {
+    document.getElementById('gh-path').addEventListener('keydown', event => {
       if (event.key === 'Enter') { event.preventDefault(); makeGithubUrl(); }
     });
 
