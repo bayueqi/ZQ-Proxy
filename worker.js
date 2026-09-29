@@ -588,19 +588,16 @@ const APP_PAGE_HTML = `
   <div class="container mx-auto px-3 sm:px-4 py-6 sm:py-8">
     <h1 class="text-2xl sm:text-3xl font-bold mb-5 sm:mb-6 text-center text-gray-800">ZQ-Proxy</h1>
 
-    <!-- GitHub 文件加速：域名 / 密码 / 文件 -->
+    <!-- GitHub 文件加速：域名 + 文件。密码用的是登录进来的那个，不再单独填 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
       <h2 class="text-lg sm:text-xl font-semibold mb-2 text-gray-700">GitHub 文件加速</h2>
       <p class="text-sm text-gray-500 mb-4">
-        三段分开填，拼出来的链接形如 <code>https://本站域名/密码/github.com/文件</code>，别人拿到链接直接就能下。
+        填域名和文件，拼出来的链接形如 <code>https://本站域名/密码/github.com/文件</code>；
+        密码就是你现在登录用的这个，别人拿到链接直接就能下。
       </p>
       <div class="flex flex-col sm:flex-row gap-3">
         <input type="text" id="gh-domain" placeholder="域名（例如 github.com）"
-               class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <input type="text" id="gh-pwd" placeholder="密码"
-               class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-      </div>
-      <div class="flex flex-col sm:flex-row gap-3 mt-3">
+               class="sm:w-56 sm:flex-none p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
         <input type="text" id="gh-file" placeholder="文件（例如 user/repo/releases/download/v1/a.zip）"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button type="button" id="gh-btn" class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition">
@@ -821,19 +818,18 @@ const APP_PAGE_HTML = `
       return location.hostname + '/' + encodeURIComponent(PWD) + '/';
     }
 
-    // ── GitHub 文件加速：域名 / 密码 / 文件 ──
+    // ── GitHub 文件加速：域名 + 文件（密码取自当前登录，不再单独填） ──
     let githubUrl = '';
 
     function makeGithubUrl() {
       const domain = document.getElementById('gh-domain').value.trim()
         .replace(/^https?:[/]{2}/i, '').replace(/[/]+$/, '');
-      const pwd = document.getElementById('gh-pwd').value;
       const file = document.getElementById('gh-file').value.trim().replace(/^[/]+/, '');
       const status = document.getElementById('gh-status');
       const out = document.getElementById('gh-out');
 
-      if (!domain || !pwd || !file) {
-        status.textContent = '域名、密码、文件三段都要填';
+      if (!domain || !file) {
+        status.textContent = '域名和文件都要填';
         out.style.display = 'none';
         return;
       }
@@ -1050,8 +1046,7 @@ const APP_PAGE_HTML = `
       if (event.key === 'Enter') { event.preventDefault(); searchImage(); }
     });
 
-    // GitHub 文件加速：密码框默认就是当前登录用的密码（本来就是同一个）
-    document.getElementById('gh-pwd').value = PWD;
+    // GitHub 文件加速。密码用的是 URL 里的 PWD（确认一下确实带着，缺了就说是没登录）
     document.getElementById('gh-btn').addEventListener('click', makeGithubUrl);
     document.getElementById('gh-copy').addEventListener('click', () => {
       copyWithFeedback(githubUrl, document.getElementById('gh-copy'));
