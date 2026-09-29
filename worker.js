@@ -548,11 +548,7 @@ const APP_PAGE_HTML = `
 
     <!-- GitHub 文件加速：一个输入框，把 github.com/... 的路径整段粘进来就行。密码用登录的那个，不单独填 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
-      <h2 class="text-lg sm:text-xl font-semibold mb-2 text-gray-700">GitHub 文件加速</h2>
-      <p class="text-sm text-gray-500 mb-4">
-        粘贴原链接（也可以只贴路径），拼出来的链接形如 <code>https://本站域名/密码/github.com/文件</code>；
-        密码就是你现在登录用的这个，别人拿到链接直接就能下。
-      </p>
+      <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">GitHub 文件加速</h2>
       <div class="flex flex-col sm:flex-row gap-3">
         <input type="text" id="gh-path" placeholder="github.com/user/repo/releases/download/v1.0.0/a.zip"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -572,12 +568,7 @@ const APP_PAGE_HTML = `
 
     <!-- 镜像查询 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
-      <h2 class="text-lg sm:text-xl font-semibold mb-2 text-gray-700">Docker 镜像查询</h2>
-      <p class="text-sm text-gray-500 mb-4">
-        输入镜像名 → 直接去镜像仓库取真实 tag 列表，再用下面的命令走本代理拉取。
-        官方镜像写名字即可（<code>nginx</code>）；组织镜像必须写全 <code>组织/镜像</code>（如 <code>openlistteam/openlist</code>）；
-        其他仓库写主机名（如 <code>ghcr.io/用户名/镜像</code>）。
-      </p>
+      <h2 class="text-lg sm:text-xl font-semibold mb-4 text-gray-700">Docker 镜像查询</h2>
       <div class="flex flex-col sm:flex-row gap-3">
         <input type="text" id="image-query" placeholder="镜像名（例如：nginx / bitnami/nginx / openlistteam/openlist）"
                class="flex-grow p-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
