@@ -749,7 +749,6 @@ const APP_PAGE_HTML = `
       status.textContent = '链接已生成，格式：本站域名/密码/域名/文件';
       document.getElementById('gh-link').textContent = githubUrl;
       out.style.display = 'block';
-      copyWithFeedback(githubUrl, document.getElementById('gh-copy'));
     }
 
     let imageBusy = false;
