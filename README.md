@@ -165,7 +165,6 @@ raw.githubusercontent.com → raw-githubusercontent-com-proxy.你的域名
 | `RESTRICT_PATHS` | 顶部 | `false` | 是否限制 GitHub / Docker 的请求路径 |
 | `ALLOWED_PATHS` | 顶部 | `['library', ...]` | `RESTRICT_PATHS` 打开时生效的路径关键字 |
 | `DOCKER_BLOB_DIRECT` | 顶部 | `false` | 镜像层是否改成 302 直连源站 CDN。打开能大幅降低 Worker 请求数，**前提是客户端能直连该 CDN** —— 打开前先本机 `docker pull` 验一次 |
-| `TRACE_HOSTS` | 顶部 | gist 相关 3 个 | 只给这几个目标打一行来源指纹，排查用，用完可整块删 |
 | `STATIC_CACHE` 等 | 顶部 | 见注释 | 按内容类型分级设置的浏览器缓存策略 |
 
 代码里没有任何内置域名清单，关联域名一律靠扫描现取。

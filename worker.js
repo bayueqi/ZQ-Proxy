@@ -351,21 +351,6 @@ const JSON_CACHE = 'public, max-age=300';
 // 打开前请先本机 docker pull 验证一次；不通就保持 false。
 const DOCKER_BLOB_DIRECT = false;
 
-// 排查用（临时）：只给这几个目标站打一行「来源指纹」。
-// Workers Logs 免费只有 20 万事件/天，不能全量打；查清楚 gist 的请求方是谁之后这段可以整块删掉。
-const TRACE_HOSTS = [
-  'gist.github.com',
-  'gist.githubusercontent.com',
-  'raw.githubusercontent.com'
-];
-
-function logOriginFingerprint(targetHost, request) {
-  if (!TRACE_HOSTS.includes(targetHost)) return;
-  const ua = (request.headers.get('User-Agent') || '-').slice(0, 90);
-  const ref = (request.headers.get('Referer') || '-').slice(0, 80);
-  console.log(`ORIGIN host=${targetHost} ua=${ua} ref=${ref}`);
-}
-
 // 闪电 SVG 图标（Base64 编码）
 const LIGHTNING_SVG = `
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#FBBF24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1108,9 +1093,6 @@ async function handleRequest1js(request, redirectCount = 0) {
       return new Response(`Error: The path is not in the allowed paths.\n`, { status: 403 });
     }
   }
-
-  // 排查用：记录目标站请求的来源指纹
-  logOriginFingerprint(targetDomain, request);
 
   // 构建目标 URL
   let targetUrl;
@@ -1885,9 +1867,6 @@ async function handleRequest(request, ctx) {
   if (!target_host) {
     return new Response(`Domain not configured for proxy. Host: ${effective_host}, Prefix: ${host_prefix}, Target lookup failed`, { status: 404 });
   }
-
-  // 排查用：记录目标站请求的来源指纹
-  logOriginFingerprint(target_host, request);
 
   // 直接使用正则表达式处理最常见的嵌套URL问题
   let pathname = url.pathname;
