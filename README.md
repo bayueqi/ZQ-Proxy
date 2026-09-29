@@ -20,13 +20,12 @@ Cloudflare 面板 → **Workers & Pages → KV** → 创建命名空间（名字
 绑定时**变量名必须填 `Proxy`** —— 代码里 `KV_BINDING_NAME = 'Proxy'` 是写死的，名字不对等于没有 KV，
 界面在保存站点或设置密码时会在报错里提示这一点。
 
-KV 里会存三个键：
+KV 里会存两个键：
 
 | Key | 内容 |
 | --- | --- |
 | `admin_password` | 访问密码（明文，Workers 除 KV 外没有密钥存储） |
 | `site_groups` | 站点分组白名单，形如 `[{"name":"GitHub","domains":["github.com",...]}]` |
-| `docker_hub_credential` | 可选的 Docker Hub 用户名 + PAT |
 
 ### 2. 部署 Worker
 
@@ -82,12 +81,12 @@ https://proxy.你的域名/密码/github.com/用户名/仓库/releases/download/
 - 组织镜像必须写全：`openlistteam/openlist`
 - 其他仓库带主机名：`ghcr.io/用户名/镜像`
 
-标题旁的 **Docker Hub 凭据** 按钮打开弹窗，填 Docker Hub 用户名 + Personal Access Token
-（Hub → Account settings → Personal access tokens，权限 Read-only 就够）。
+查询只认**完整仓库名**，没有关键词模糊搜索。曾经做过一条（Docker Hub 的 `search/v4` 端点 + 自填凭据），
+2026-09-29 整条删掉了：那个搜索接口按出口 IP 做 abuse 限流，而 Worker 的出口 IP 是共享的，
+连拿凭据换 token 的那一步（`POST hub.docker.com/v2/auth/token`）都直接 429 ——
+请求在「你的账号是谁」被判定之前就被挡掉，凭据填了也救不回来，属于「点了必然报错」的功能。
 
-**凭据只影响关键词模糊搜索**，不影响按镜像名查 tag。原因：Docker Hub 的搜索接口按出口 IP 限流，
-与账号等级无关，而 Worker 的出口 IP 是共享的，不带凭据必然 429。填上自己的账号，这份额度才算你的。
-Token 明文存 KV，保存后不回显，只有通过页面认证才读得到。
+要模糊搜就去 hub.docker.com 网站自己搜，拿到 `组织/镜像` 再回这里查 tag。
 
 ### 添加站点
 
@@ -171,7 +170,7 @@ raw.githubusercontent.com → raw-githubusercontent-com-proxy.你的域名
 
 - 不支持 GitHub 的登录 / 注册（相关路径会被重定向出去）
 - 部分依赖 WebSocket 或特殊认证的 GitHub 功能不可用
-- Docker Hub 关键词搜索必须自带凭据，否则 429
+- Docker Hub 没有关键词模糊搜索（上游按共享出口 IP 限流，做不了），只能按完整仓库名查 tag
 - 关联域名扫描只覆盖首页 HTML + CSP 头 + 同站脚本，动态请求的接口域名抓不到
 - 白名单为空时，`*-proxy.` 主机不会代理任何站点
 
@@ -185,7 +184,7 @@ raw.githubusercontent.com → raw-githubusercontent-com-proxy.你的域名
 | 加速链接返回 401 | 链接第一段不是密码，或密码被 URL 编码后不一致 |
 | `docker pull` 报 `unauthorized` | 同上，密码段漏了或写错 |
 | 打开页面版式简陋、无样式 | 页面样式走 Tailwind CDN，网络不通时退化，功能不受影响 |
-| 镜像查询 429 | Docker Hub 按出口 IP 限流，配凭据后走自己的额度 |
+| 镜像查询说「没找到」 | 名字不完整。组织镜像必须写成 `组织/镜像`（如 `openlistteam/openlist`），只有官方镜像可以只写名字 |
 | 某个域名没被放行 | 它在 KV 的 `site_groups` 里吗？新加的域名有 60 秒内存缓存 |
 
 ---

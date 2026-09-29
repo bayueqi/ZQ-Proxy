@@ -616,18 +616,11 @@ const APP_PAGE_HTML = `
 
     <!-- 镜像查询 -->
     <div class="card p-4 sm:p-6 mb-4 sm:mb-6">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-        <h2 class="text-lg sm:text-xl font-semibold text-gray-700" style="margin:0;">Docker 镜像查询</h2>
-        <button type="button" id="cred-btn"
-                style="padding:4px 12px;border:1px solid #93c5fd;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:13px;cursor:pointer;">
-          Docker Hub 凭据
-        </button>
-      </div>
+      <h2 class="text-lg sm:text-xl font-semibold mb-2 text-gray-700">Docker 镜像查询</h2>
       <p class="text-sm text-gray-500 mb-4">
         输入镜像名 → 直接去镜像仓库取真实 tag 列表，再用下面的命令走本代理拉取。
         官方镜像写名字即可（<code>nginx</code>）；组织镜像必须写全 <code>组织/镜像</code>（如 <code>openlistteam/openlist</code>）；
         其他仓库写主机名（如 <code>ghcr.io/用户名/镜像</code>）。
-        查不到时可以配置凭据，按关键词模糊搜（见旁边的「Docker Hub 凭据」）。
       </p>
       <div class="flex flex-col sm:flex-row gap-3">
         <input type="text" id="image-query" placeholder="镜像名（例如：nginx / bitnami/nginx / openlistteam/openlist）"
@@ -671,48 +664,6 @@ const APP_PAGE_HTML = `
       </div>
     </div>
 
-  </div>
-
-  <!-- Docker Hub 凭据弹窗（默认隐藏，点标题旁的按钮才出现） -->
-  <div id="cred-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:50;align-items:center;justify-content:center;padding:16px;">
-    <div style="background:#ffffff;border-radius:12px;max-width:520px;width:100%;max-height:90vh;overflow-y:auto;padding:20px;box-shadow:0 20px 40px rgba(0,0,0,0.2);">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-        <h3 style="margin:0;font-size:17px;font-weight:600;color:#374151;">Docker Hub 凭据</h3>
-        <button type="button" id="cred-close"
-                style="padding:4px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#ffffff;color:#6b7280;font-size:13px;cursor:pointer;">
-          关闭
-        </button>
-      </div>
-      <p style="margin:12px 0;font-size:13px;color:#6b7280;line-height:1.6;">
-        只影响关键词模糊搜索，不影响按镜像名查询 tag。
-        未带凭据时 Docker Hub 的搜索接口按出口 IP 限流，而 Cloudflare Worker 的出口 IP 是共享的，
-        所以搜索必然返回 429 —— 填上你自己的账号，这份额度才算你的。
-      </p>
-      <div id="cred-status" style="margin-bottom:14px;padding:10px;border-radius:8px;background:#f9fafb;font-size:13px;"></div>
-      <form id="cred-form">
-        <label for="cred-username" style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Docker Hub 用户名</label>
-        <input type="text" id="cred-username" autocomplete="off" placeholder="登录 Docker Hub 的那个用户名"
-               style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box;">
-        <label for="cred-token" style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Personal Access Token</label>
-        <input type="password" id="cred-token" autocomplete="off" placeholder="dckr_pat_…"
-               style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box;">
-        <p style="margin:8px 0 14px;font-size:12px;color:#9ca3af;line-height:1.6;">
-          Token 在 Docker Hub → Account settings → Personal access tokens 里创建，权限给 Read-only 就够。
-          它明文存在 KV 里（Workers 除了 KV 没有别的密钥存储），只有通过管理页认证才读得到；保存后不回显。
-        </p>
-        <div style="display:flex;gap:8px;justify-content:flex-end;">
-          <button type="button" id="cred-clear"
-                  style="padding:8px 14px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;color:#b91c1c;font-size:13px;cursor:pointer;">
-            清除凭据
-          </button>
-          <button type="submit" id="cred-save"
-                  style="padding:8px 18px;border:none;border-radius:8px;background:#3b82f6;color:#ffffff;font-size:13px;cursor:pointer;">
-            保存
-          </button>
-        </div>
-      </form>
-      <div id="cred-msg" style="margin-top:12px;font-size:13px;color:#374151;"></div>
-    </div>
   </div>
 
   <script>
@@ -938,40 +889,6 @@ const APP_PAGE_HTML = `
       box.appendChild(details);
     }
 
-    // 关键词模糊搜的结果。每条都给一条能直接用的 pull 命令，
-    // 「查 tag」会拿这个名字再走一次精确查询（走的是 registry，不是搜索）。
-    function renderList(box, data) {
-      data.results.forEach(item => {
-        const command = 'docker pull ' + pullPrefix() +
-          pullTarget('registry-1.docker.io', item.name) + ':latest';
-
-        const info = document.createElement('div');
-        info.className = 'res-main';
-        info.appendChild(makeText(item.name + (item.official ? ' · 官方镜像' : ''),
-          'display:block;color:#374151;font-weight:500;'));
-        if (item.desc) {
-          info.appendChild(makeText(item.desc, 'display:block;color:#6b7280;font-size:12px;'));
-        }
-        info.appendChild(makeText('★ ' + item.stars + (item.pulls ? ' · 拉取 ' + item.pulls : ''),
-          'display:block;color:#9ca3af;font-size:12px;'));
-        const commandText = makeText(command, '');
-        commandText.className = 'res-cmd';
-        info.appendChild(commandText);
-
-        const tagsButton = makeButton('查 tag', () => {
-          document.getElementById('image-query').value = item.name;
-          searchImage();
-        });
-        const copy = makeButton('复制命令', () => copyWithFeedback(command, copy));
-
-        const line = makeLine();
-        line.appendChild(info);
-        line.appendChild(tagsButton);
-        line.appendChild(copy);
-        box.appendChild(line);
-      });
-    }
-
     async function searchImage() {
       if (imageBusy) return;
 
@@ -1015,7 +932,7 @@ const APP_PAGE_HTML = `
           status.appendChild(makeText(data.detail, 'display:block;color:#6b7280;margin-top:4px;'));
         }
         if (data.failures && data.failures.length) {
-          status.appendChild(makeText('上游返回：' + data.failures.join('；'),
+          status.appendChild(makeText('查询明细：' + data.failures.join('；'),
             'display:block;color:#9ca3af;font-size:12px;margin-top:4px;'));
         }
         return;
@@ -1024,13 +941,6 @@ const APP_PAGE_HTML = `
       if (data.kind === 'image') {
         status.textContent = '镜像存在，下面是仓库里的真实 tag';
         renderImage(box, data);
-        return;
-      }
-
-      if (data.kind === 'list') {
-        status.textContent = '按关键词「' + data.query + '」搜到 ' + data.count + ' 个，显示前 '
-          + data.results.length + ' 个 —— 点「查 tag」能看到某个镜像的真实 tag';
-        renderList(box, data);
         return;
       }
 
@@ -1058,110 +968,6 @@ const APP_PAGE_HTML = `
       if (event.key === 'Enter') { event.preventDefault(); makeGithubUrl(); }
     });
 
-    // ── Docker Hub 凭据弹窗 ──
-    // 认证只认 URL 里的 pwd，所以这几个请求都得把 PWD 带上
-    const CRED_URL = '/api/docker-credential?pwd=' + encodeURIComponent(PWD);
-    const credModal = document.getElementById('cred-modal');
-    const credMsg = document.getElementById('cred-msg');
-    let credState = { configured: false, username: '' };
-
-    function renderCredState() {
-      const box = document.getElementById('cred-status');
-      box.replaceChildren();
-      box.appendChild(makeText(credState.configured
-        ? '已配置：' + credState.username + '（关键词模糊搜已启用）'
-        : '未配置（只能按镜像名查询 tag，查不到时不会去搜索）',
-        'display:block;font-weight:500;color:' + (credState.configured ? '#15803d' : '#b45309') + ';'));
-    }
-
-    async function loadCredState() {
-      try {
-        const res = await fetch(CRED_URL);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (typeof data.configured !== 'boolean') return;
-        credState = data;
-        renderCredState();
-        // 只回填用户名，PAT 一律不回显
-        document.getElementById('cred-username').value = data.configured ? data.username : '';
-      } catch (error) {
-        // 拉不到状态不影响用，保持默认文案即可，不弹错
-      }
-    }
-
-    function openCredModal() {
-      credMsg.textContent = '';
-      credModal.style.display = 'flex';
-      renderCredState();
-      loadCredState();
-      document.getElementById('cred-username').focus();
-    }
-
-    function closeCredModal() {
-      credModal.style.display = 'none';
-      document.getElementById('cred-token').value = '';
-    }
-
-    document.getElementById('cred-btn').addEventListener('click', openCredModal);
-    document.getElementById('cred-close').addEventListener('click', closeCredModal);
-    credModal.addEventListener('click', event => { if (event.target === credModal) closeCredModal(); });
-    document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && credModal.style.display !== 'none') closeCredModal();
-    });
-
-    document.getElementById('cred-form').addEventListener('submit', async event => {
-      event.preventDefault();
-      const username = document.getElementById('cred-username').value.trim();
-      const token = document.getElementById('cred-token').value.trim();
-      if (!username || !token) {
-        credMsg.textContent = '用户名和 Personal Access Token 都要填';
-        return;
-      }
-
-      const save = document.getElementById('cred-save');
-      save.disabled = true;
-      credMsg.textContent = '保存中…';
-      try {
-        const res = await fetch(CRED_URL, {
-          method: 'POST',
-          body: new URLSearchParams({ action: 'save', username, token })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          credMsg.textContent = '保存失败：' + (data.error || ('HTTP ' + res.status));
-          return;
-        }
-        credState = data;
-        renderCredState();
-        document.getElementById('cred-token').value = '';   // 存完就把 PAT 从输入框里清掉
-        credMsg.textContent = '已保存，现在可以直接输关键词搜了';
-      } catch (error) {
-        credMsg.textContent = '保存失败：' + error.message;
-      } finally {
-        save.disabled = false;
-      }
-    });
-
-    document.getElementById('cred-clear').addEventListener('click', async () => {
-      credMsg.textContent = '清除中…';
-      try {
-        const res = await fetch(CRED_URL, {
-          method: 'POST',
-          body: new URLSearchParams({ action: 'clear' })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          credMsg.textContent = '清除失败：' + (data.error || ('HTTP ' + res.status));
-          return;
-        }
-        credState = data;
-        renderCredState();
-        document.getElementById('cred-username').value = '';
-        credMsg.textContent = '已清除，关键词模糊搜已关闭';
-      } catch (error) {
-        credMsg.textContent = '清除失败：' + error.message;
-      }
-    });
   </script>
 </body>
 </html>
@@ -1865,35 +1671,6 @@ async function handleAppRequest(request) {
     return jsonResponse(await findRelatedDomains(url.searchParams.get('domain') || ''));
   }
 
-  // Docker Hub 凭据（界面弹窗读写）。
-  // 单独走这里并直接 return，不落到下面那次必然发生的 saveSiteGroups ——
-  // KV 免费额度只有 1000 写/天，不该为存个凭据白写一次站点分组。
-  if (url.pathname === '/api/docker-credential') {
-    if (request.method === 'GET') {
-      const credential = await getDockerCredential();
-      return jsonResponse({ configured: !!credential, username: credential ? credential.username : '' });
-    }
-    if (request.method !== 'POST') {
-      return jsonResponse({ error: '只支持 GET / POST' }, 405);
-    }
-
-    const body = await request.formData();
-    if (String(body.get('action') || '') === 'clear') {
-      await saveDockerCredential(null);
-      return jsonResponse({ configured: false, username: '' });
-    }
-
-    const username = String(body.get('username') || '').trim();
-    const token = String(body.get('token') || '').trim();
-    if (!username || !token) {
-      return jsonResponse({ error: '用户名和 Personal Access Token 都需要填写' }, 400);
-    }
-    if (!await saveDockerCredential({ username, token })) {
-      return jsonResponse({ error: '保存失败：KV 没绑定或写入出错（面板 → 设置 → 绑定，变量名填 Proxy）' }, 500);
-    }
-    return jsonResponse({ configured: true, username });
-  }
-
   if (request.method === 'GET') {
     // 显示主界面
     const groups = await getSiteGroups();
@@ -1952,176 +1729,19 @@ async function handleAppRequest(request) {
 
 // ── 镜像查询 ────────────────────────────────────────────────────────────────
 //
-// ① 精确镜像名：GET https://<仓库>/v2/<repo>/tags/list
-//    上游就是本 Worker 一直在代理的 registry-1.docker.io / ghcr.io / quay.io 等，
-//    401 时按 WWW-Authenticate 换匿名 token 即可，不需要任何账号，也不碰 hub.docker.com。
+// 只做一件事：GET https://<仓库>/v2/<repo>/tags/list 拿真实 tag 列表。
+// 上游就是本 Worker 一直在代理的 registry-1.docker.io / ghcr.io / quay.io 等，
+// 401 时按 WWW-Authenticate 换匿名 token 即可，不需要任何账号，也不碰 hub.docker.com。
 //
-// ② 关键词模糊搜（可选）：hub.docker.com 的搜索端点，只有在管理页配了 Docker Hub 凭据时才走。
-//    为什么必须配凭据：这两个端点是 Docker Hub 网站自用的未公开接口，未鉴权时按出口 IP 限流，
-//    而 Cloudflare Worker 的出口 IP 是共享的 —— 线上实测未带凭据时 v2 与 v4 同时 429
-//    （Retry-After: 60，正文 {"detail":"Rate limit exceeded"}），重试和缓存都救不回来。
-//    带上账号凭据后，限流桶从「共享 IP」变成「你自己的账号」，这条路才有可能通。
-//    换 token 按官方文档：POST https://hub.docker.com/v2/auth/token
-//    body {"identifier": 用户名, "secret": PAT} → {"access_token"}（JWT，10 分钟有效），随后用 Bearer 带。
+// 这里曾经还有一条「关键词模糊搜」（hub.docker.com 的 search/v4 端点 + 用户自填 Docker Hub 凭据），
+// 2026-09-29 整条删除。原因：那个搜索接口按出口 IP 做 abuse 限流，而 CF Worker 的出口 IP 是共享的，
+// 连拿凭据换 token 的那一步（POST hub.docker.com/v2/auth/token）都直接 429 ——
+// 请求在「你的账号是谁」被判定之前就被挡掉了，所以凭据填了也救不回来。
+// 结论：这条路点上必然报错，不如不做。要模糊搜就去 hub.docker.com 网站自己搜，
+// 拿到完整仓库名（必须是 组织/镜像，如 openlistteam/openlist）再回这里查 tag。
 
 // 允许被查询的仓库主机，写死在这里：用户输入只影响仓库名，不会变成 Worker 去打任意地址
 const IMAGE_REGISTRY_HOSTS = ['registry-1.docker.io', 'ghcr.io', 'quay.io', 'gcr.io', 'registry.k8s.io'];
-
-// ── Docker Hub 凭据（用户名 + PAT，存 KV）───────────────────────────────────
-// 只用于上面 ② 的关键词搜索；① 的精确镜像名查询不需要它，所以没配也能正常用。
-// 注意：KV 里是明文存的（Workers 除了 KV 没有别的密钥存储），这点在管理页弹窗里也写明。
-const DOCKER_CREDENTIAL_KEY = 'docker_hub_credential';
-
-// 凭据读缓存（isolate 级 60 秒），别让每次查询都花掉一次 KV 读
-let cachedDockerCredential;
-let cachedDockerCredentialAt = 0;
-const DOCKER_CREDENTIAL_TTL_MS = 60000;
-
-async function getDockerCredential() {
-  const now = Date.now();
-  if (cachedDockerCredential !== undefined && now - cachedDockerCredentialAt < DOCKER_CREDENTIAL_TTL_MS) {
-    return cachedDockerCredential;
-  }
-
-  let value = null;
-  const kv = getKV();
-  if (kv) {
-    try {
-      const raw = await kv.get(DOCKER_CREDENTIAL_KEY);
-      if (raw) value = JSON.parse(raw);
-    } catch (error) {
-      console.error('读取 Docker Hub 凭据失败:', error && error.message ? error.message : String(error));
-    }
-  }
-
-  cachedDockerCredential = value;
-  cachedDockerCredentialAt = now;
-  return value;
-}
-
-// credential 传 null 表示清除
-async function saveDockerCredential(credential) {
-  const kv = getKV();
-  if (!kv) {
-    console.error('KV binding missing: Docker Hub 凭据无法保存（面板 → 设置 → 绑定，KV 命名空间的变量名填 Proxy）');
-    return false;
-  }
-  try {
-    if (credential) await kv.put(DOCKER_CREDENTIAL_KEY, JSON.stringify(credential));
-    else await kv.delete(DOCKER_CREDENTIAL_KEY);
-    cachedDockerCredential = credential || null;
-    cachedDockerCredentialAt = Date.now();
-    return true;
-  } catch (error) {
-    console.error('保存 Docker Hub 凭据失败:', error && error.message ? error.message : String(error));
-    return false;
-  }
-}
-
-// Hub 的 JWT 只有 10 分钟，这里缓存 8 分钟
-let cachedHubToken = null;
-
-async function getHubToken(credential) {
-  if (cachedHubToken && cachedHubToken.username === credential.username &&
-      cachedHubToken.expiresAt > Date.now() + 60000) {
-    return { token: cachedHubToken.token };
-  }
-
-  let response;
-  try {
-    response = await fetch('https://hub.docker.com/v2/auth/token', {
-      method: 'POST',
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'ZQ-Proxy/1.0' },
-      body: JSON.stringify({ identifier: credential.username, secret: credential.token })
-    });
-  } catch (error) {
-    return { error: `请求失败：${error && error.message ? error.message : String(error)}` };
-  }
-
-  if (!response.ok) {
-    const body = (await response.text().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 160);
-    return { error: `被拒（HTTP ${response.status}）${body}` };
-  }
-
-  const data = await response.json().catch(() => null);
-  const token = data && data.access_token;
-  if (!token) return { error: '响应里没有 access_token' };
-
-  cachedHubToken = { username: credential.username, token, expiresAt: Date.now() + 8 * 60 * 1000 };
-  return { token };
-}
-
-// 关键词搜索端点，按顺序试；两个都失败时把各自的状态一起报出来。
-// v4 是 hub.docker.com 前端和 Docker 官方 MCP 在用的 Search API（type=image 挡掉插件/扩展这类
-// docker pull 拉不动的结果，不然给出来就是条假命令）；v2 是老端点，留着当第二跳。
-const HUB_SEARCH_ENDPOINTS = [
-  {
-    label: 'search/v4',
-    build: query => 'https://hub.docker.com/api/search/v4?custom_boosted_results=true&type=image&query=' +
-      encodeURIComponent(query) + '&size=25'
-  },
-  {
-    label: 'search/repositories(v2)',
-    build: query => 'https://hub.docker.com/v2/search/repositories/?query=' +
-      encodeURIComponent(query) + '&page=1&page_size=25'
-  }
-];
-
-const HUB_SEARCH_HEADERS = {
-  'Accept': 'application/json',
-  'User-Agent': 'ZQ-Proxy/1.0'
-};
-
-// 关键词搜索。返回 { results, count } 或 { error }
-async function searchHubByKeyword(keyword, credential) {
-  const auth = await getHubToken(credential);
-  if (auth.error) return { error: `Docker Hub 凭据不可用：${auth.error}` };
-
-  const failures = [];
-
-  for (const endpoint of HUB_SEARCH_ENDPOINTS) {
-    let upstream;
-    try {
-      upstream = await fetch(endpoint.build(keyword), {
-        headers: { ...HUB_SEARCH_HEADERS, 'Authorization': `Bearer ${auth.token}` }
-      });
-    } catch (error) {
-      failures.push(`${endpoint.label}: ${error && error.message ? error.message : String(error)}`);
-      continue;
-    }
-
-    if (!upstream.ok) {
-      // 429 时把 Retry-After、限额头和上游正文一起带回去：限流原因要看得见，不静默吞掉
-      const retryAfter = upstream.headers.get('retry-after');
-      const limit = upstream.headers.get('x-ratelimit-limit');
-      const remaining = upstream.headers.get('x-ratelimit-remaining');
-      const body = (await upstream.text().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 120);
-      failures.push(`${endpoint.label}: HTTP ${upstream.status}` +
-        (retryAfter ? `（Retry-After: ${retryAfter}）` : '') +
-        (limit ? `（限额 ${limit}/分钟，剩余 ${remaining}）` : '') +
-        (body ? ` ${body}` : ''));
-      continue;
-    }
-
-    const data = await upstream.json().catch(() => null);
-    if (!data) { failures.push(`${endpoint.label}: 返回的不是 JSON`); continue; }
-    if (data.error) { failures.push(`${endpoint.label}: ${data.error}`); continue; }
-
-    // v4 用 name / badge / pull_count(字符串)，v2 用 repo_name / is_official / pull_count(数字)，两种都认
-    const results = (data.results || []).map(item => ({
-      name: item.name || item.repo_name || '',
-      desc: item.short_description || '',
-      stars: Number(item.star_count) || 0,
-      pulls: item.pull_count === undefined || item.pull_count === null ? '' : String(item.pull_count),
-      official: item.badge === 'official' || item.is_official === true
-    })).filter(item => item.name);
-
-    const total = data.total !== undefined && data.total !== null ? data.total : (data.count || 0);
-    return { results, count: total };
-  }
-
-  return { error: 'Docker Hub 搜索失败（已带凭据）—— ' + failures.join('；') };
-}
 
 // 解析用户输入 → { host, repo, repos, tag }；不是合法镜像名时返回 { error }
 // tag 是用户自己写的那种（nginx:1.25），返回去是为了让页面预选它，而不是悄悄换成 latest
@@ -2139,12 +1759,11 @@ function parseImageInput(input) {
   const tag = cut === -1 ? '' : stripped.slice(cut + 1);
 
   // 每段都以字母数字开头，顺带挡掉 .. 和空段（host 是写死的，这里只是别拼出怪路径）
-  // searchable：这种失败说明「输入不像镜像名」，那它更可能是个关键词，值得再去模糊搜一次
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/.test(name)) {
-    return { error: '不是合法镜像名', searchable: true };
+    return { error: '不是合法镜像名' };
   }
   if (tag && !/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/.test(tag)) {
-    return { error: '不是合法镜像名', searchable: true };
+    return { error: '不是合法镜像名' };
   }
 
   const slash = name.indexOf('/');
@@ -2197,6 +1816,9 @@ async function fetchRepoTags(host, repo) {
   }
 
   if (response.status === 404) return { missing: true };
+  // Docker Hub 对「仓库不存在」和「私有仓库」都回 401（不是 404）。换过匿名 token 仍是 401 就是这两类，
+  // 把 HTTP 401 原样甩给用户，看着像鉴权坏了，实际绝大多数情况只是名字写错了。
+  if (response.status === 401) return { missing: true, denied: true };
   if (!response.ok) return { error: `HTTP ${response.status}` };
 
   const data = await response.json().catch(() => null);
@@ -2225,7 +1847,7 @@ async function handleImageSearch(request, ctx) {
   const parsed = parseImageInput(query);
   const failures = [];
 
-  // ① 精确镜像名：直接问仓库要 tag，完全不碰 hub.docker.com
+  // 直接问仓库要 tag，完全不碰 hub.docker.com
   if (!parsed.error) {
     const cacheKey = new Request(new URL(
       `/__cache/image-tags?h=${parsed.host}&r=${encodeURIComponent(parsed.repos.join(','))}`, request.url));
@@ -2237,7 +1859,10 @@ async function handleImageSearch(request, ctx) {
     for (const repo of parsed.repos) {
       const result = await fetchRepoTags(parsed.host, repo);
       if (result.error) { failures.push(`${parsed.host}/${repo}: ${result.error}`); continue; }
-      if (result.missing) continue;
+      if (result.missing) {
+        failures.push(`${parsed.host}/${repo}: ${result.denied ? '仓库不存在（或私有，没权限看）' : '仓库不存在'}`);
+        continue;
+      }
 
       const tags = result.tags || [];
       const response = jsonResponse({
@@ -2254,50 +1879,16 @@ async function handleImageSearch(request, ctx) {
     }
   }
 
-  // ② 关键词模糊搜（可选）。两个前提，缺一个就不发这趟请求：
-  //    a. 词得是 Docker Hub 上的 —— 在 ghcr.io 上没找到却去 Docker Hub 搜，搜出来的结果会误导人；
-  //    b. 配了凭据 —— 未鉴权搜索按共享出口 IP 限流，发出去也只能换回一个 429。
-  const keyword = parsed.error ? query : parsed.repos[0].replace(/^library\//, '');
-  const searchable = parsed.error ? !!parsed.searchable : parsed.host === 'registry-1.docker.io';
-  const credential = searchable ? await getDockerCredential() : null;
-
-  if (searchable && credential) {
-    const searchCacheKey = new Request(new URL(
-      '/__cache/image-search?q=' + encodeURIComponent(keyword.toLowerCase()), request.url));
-    const cache = caches.default;
-
-    const hit = await cache.match(searchCacheKey);
-    if (hit) return hit;
-
-    const found = await searchHubByKeyword(keyword, credential);
-    if (found.error) {
-      return jsonResponse({ kind: 'none', error: found.error, failures }, 502);
-    }
-
-    const response = jsonResponse({
-      kind: 'list', query: keyword, count: found.count, results: found.results
-    }, 200, true);
-    if (ctx) ctx.waitUntil(cache.put(searchCacheKey, response.clone()));
-    return response;
-  }
-
-  // 没找到，把「为什么」按情况说清楚，别甩一句干巴巴的 404
-  const hint = '想按关键词模糊搜，点「Docker 镜像查询」旁边的「凭据」，填 Docker Hub 用户名 + PAT 即可。';
-  let error;
-  let detail;
-
-  if (parsed.error) {
-    error = `“${query}”不是可查询的镜像名`;
-    detail = parsed.error + (parsed.searchable ? '　' + hint : '');
-  } else {
-    error = `没找到镜像 “${query}”`;
-    detail = parsed.host === 'registry-1.docker.io'
+  // 没找到。到这里已经实打实问过仓库了，仓库里没有就是没有 —— 把「为什么、该怎么办」说清楚。
+  const error = parsed.error ? `“${query}”不是可查询的镜像名` : `没找到镜像 “${query}”`;
+  const detail = parsed.error
+    ? parsed.error
+    : parsed.host === 'registry-1.docker.io'
       // 官方镜像要求不带命名空间，组织镜像必须写全 组织/镜像 —— 这是最常见的踩坑点
       ? 'Docker Hub 上只有官方镜像能只写名字（实际仓库名是 library/<名字>）。' +
         '别的镜像都在某个组织下面，必须写成 组织/镜像 才算完整仓库名 —— 例如 openlistteam/openlist。' +
-        (searchable ? '　' + hint : '')
-      : `${parsed.host} 上没有这个仓库，Docker Hub 的搜索也不覆盖它。`;
-  }
+        '不确定完整名字，就去 hub.docker.com 网站搜一下。'
+      : `${parsed.host} 上没有这个仓库。`;
 
   return jsonResponse({ kind: 'none', error, detail, failures }, parsed.error ? 400 : 404);
 }
@@ -2305,29 +1896,35 @@ async function handleImageSearch(request, ctx) {
 async function handleRequest(request, ctx) {
   const url = new URL(request.url);
 
-  // 界面与界面自己的接口。入口只有一个 /，/admin 保留为等价入口（旧书签仍然能用），
-  // 右上角已经没有任何跳转按钮了。
-  if (url.pathname === '/' || url.pathname === '/admin' ||
-      url.pathname === '/api/find-domains' || url.pathname === '/api/docker-credential') {
-    return handleAppRequest(request);
-  }
-
-  // 镜像查询 API。必须挡在 handleRequest1js 之前：那边除 '/' 之外的任何路径都会被
-  // 当成 Docker 镜像名解析，/api/image-search 会变成去 registry 拉一个叫这个名字的镜像。
-  if (url.pathname === '/api/image-search') {
-    return handleImageSearch(request, ctx);
-  }
-
   // 统一转小写
   const current_host = url.host.toLowerCase();
   const host_header = request.headers.get('Host');
   const effective_host = (host_header || current_host).toLowerCase();
 
+  // ★ 主机名必须判在路径之前。反过来的话，下面那句「路径是 / 就给界面」会对所有主机生效 ——
+  //   包括真正的代理主机（github-com-proxy.域名），结果就是控制台里点「代理域名」进去看到的是界面，
+  //   而不是被代理的站点。2026-09-29 实测确认过这个回归。
+  const host_prefix = getProxyPrefix(effective_host);
+
+  if (!host_prefix) {
+    // 只有控制台主机（proxy.域名、根域名这类不带 -proxy. 的）才给界面和界面自己的接口。
+    // 入口只有一个 /，/admin 保留为等价入口（旧书签仍然能用），右上角已经没有任何跳转按钮了。
+    if (url.pathname === '/' || url.pathname === '/admin' ||
+        url.pathname === '/api/find-domains') {
+      return handleAppRequest(request);
+    }
+
+    // 镜像查询 API。必须挡在 handleRequest1js 之前：那边非 '/' 的路径都会被当成 Docker 镜像名解析，
+    // /api/image-search 会变成去 registry 拉一个叫这个名字的镜像。
+    if (url.pathname === '/api/image-search') {
+      return handleImageSearch(request, ctx);
+    }
+  }
+
   // 哪些主机名能进这个 Worker，由 Cloudflare 的路由决定，代码里不再另外维护白名单：
   //   路由 1：proxy.域名/*          → 加速工具界面 / 管理页（README 里的「添加域名指向 Worker」）
-  //   路由 2：*-proxy.域名/*        → GitHub 各子域代理
+  //   路由 2：*-proxy.域名/*        → 各子域代理
   // 没命中这两条路由的请求（如随机子域）根本不会到达这个 Worker。
-  const host_prefix = getProxyPrefix(effective_host);
   if (!host_prefix || url.pathname.startsWith('/https://') || url.pathname.startsWith('/v2/')) {
     return handleRequest1js(request);
   }
