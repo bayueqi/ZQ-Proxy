@@ -1069,6 +1069,10 @@ const APP_PAGE_HTML = `
     });
 
     // ── 三个板块的切换（纯显隐，不刷新页面） ──
+    // 当前板块记在 localStorage：「域名代理」里的添加站点 / 删域名 / 删分组都是表单 POST，
+    // 提交后整页刷新，不记住的话每次都会被弹回「文件下载」。
+    const TAB_KEY = 'zq-proxy:tab';
+
     function showTab(name) {
       Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), button => {
         button.classList.toggle('active', button.dataset.tab === name);
@@ -1076,11 +1080,21 @@ const APP_PAGE_HTML = `
       Array.prototype.forEach.call(document.querySelectorAll('.tab-panel'), panel => {
         panel.hidden = panel.dataset.panel !== name;
       });
+      try { localStorage.setItem(TAB_KEY, name); } catch (error) { /* 写不了就算了 */ }
     }
 
     Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), button => {
       button.addEventListener('click', () => showTab(button.dataset.tab));
     });
+
+    // 回到上次待的板块。存储不可用、或存的值对不上任何板块，就保持默认的「文件下载」——
+    // 三个按钮的名字从 DOM 里取，不写死。
+    try {
+      const savedTab = localStorage.getItem(TAB_KEY);
+      const known = Array.prototype.some.call(document.querySelectorAll('.tab-btn'),
+        button => button.dataset.tab === savedTab);
+      if (known) showTab(savedTab);
+    } catch (error) { /* 同上 */ }
 
     // ── 放行域名（文件下载专用，存 KV 的 download_domains） ──
     const dlStatus = document.getElementById('dl-status');
