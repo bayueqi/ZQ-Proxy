@@ -1831,13 +1831,12 @@ async function handleImageSearch(request, ctx) {
 
   // 没找到。到这里已经实打实问过仓库了，仓库里没有就是没有 —— 把「为什么、该怎么办」说清楚。
   const error = parsed.error ? `“${query}”不是可查询的镜像名` : `没找到镜像 “${query}”`;
+  // Docker Hub 查不到时不再解释「组织/镜像」的写法 —— 用户明确要求删掉，
+  // 这句跟界面上那句说明是同一份内容，说了两遍。detail 留空，前端就不显示这一行。
   const detail = parsed.error
     ? parsed.error
     : parsed.host === 'registry-1.docker.io'
-      // 官方镜像要求不带命名空间，组织镜像必须写全 组织/镜像 —— 这是最常见的踩坑点
-      ? 'Docker Hub 上只有官方镜像能只写名字（实际仓库名是 library/<名字>）。' +
-        '别的镜像都在某个组织下面，必须写成 组织/镜像 才算完整仓库名 —— 例如 openlistteam/openlist。' +
-        '不确定完整名字，就去 hub.docker.com 网站搜一下。'
+      ? ''
       : `${parsed.host} 上没有这个仓库。`;
 
   return jsonResponse({ kind: 'none', error, detail, failures }, parsed.error ? 400 : 404);
