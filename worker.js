@@ -1728,6 +1728,7 @@ function renderPasswordSetupPage() {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>设置访问密码 - ZQ-Proxy</title>
+      <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(LIGHTNING_SVG)}">
       <script src="https://cdn.tailwindcss.com"></script>
       <style>
         body {
@@ -1796,6 +1797,7 @@ function renderLoginPage() {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>请输入密码 - ZQ-Proxy</title>
+      <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(LIGHTNING_SVG)}">
       <script src="https://cdn.tailwindcss.com"></script>
       <style>
         body {
