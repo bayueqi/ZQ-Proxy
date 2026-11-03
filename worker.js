@@ -56,10 +56,13 @@ async function getSiteGroups() {
   return cachedGroups;
 }
 
-// 放行判断和正文域名替换都只吃扁平域名列表，这里把分组压平
+// 放行判断和正文域名替换都只吃扁平域名列表，这里把分组压平。
+// GitHub 的站点域名是内置的：登录 / 注册页的样式、脚本、头像、接口分散在多个主机上，
+// 少一个页面就是残的，不该指望用户自己去控制台一个个补。
 async function getDomainWhitelist() {
   const groups = await getSiteGroups();
-  return groups.flatMap(group => (Array.isArray(group.domains) ? group.domains : []));
+  const fromGroups = groups.flatMap(group => (Array.isArray(group.domains) ? group.domains : []));
+  return [...new Set([...GITHUB_SITE_HOSTS, ...fromGroups])];
 }
 
 // 保存站点分组到KV
@@ -375,9 +378,13 @@ function htmlResponse(html, status = 200) {
 // 由白名单自动生成映射
 async function getDomainMappings() {
   const whitelist = await getDomainWhitelist();
-  return Object.fromEntries(
-    whitelist.map(domain => [domain, domain.replace(/\./g, '-')])
-  );
+  // 统一小写：正文替换和 Location 改写都是拿主机名直接查表，大小写不一致就查不到
+  const mappings = {};
+  for (const item of whitelist) {
+    const domain = String(item).trim().toLowerCase();
+    if (domain) mappings[domain] = domain.replace(/\./g, '-');
+  }
+  return mappings;
 }
 
 // ALLOWED_HOSTS: 定义允许代理的域名列表（默认白名单）。
@@ -395,6 +402,39 @@ const ALLOWED_HOSTS = [
   'gist.github.com',
   'gist.githubusercontent.com'
 ];
+
+// GITHUB_SITE_HOSTS: 走「域名代理」（子域）时必须一起映射的域名。
+// 前 6 个是登录 / 注册页本体与它的静态资源；后面几个是头像、图片、接口和对象存储。
+// 它们同时参与正文替换 —— 页面里写死的 https://github.githubassets.com/... 会被换成本站的代理子域。
+const GITHUB_SITE_HOSTS = [
+  'github.com',
+  'api.github.com',
+  'github.githubassets.com',
+  'github-cloud.s3.amazonaws.com',
+  'avatars.githubusercontent.com',
+  'user-images.githubusercontent.com',
+  'private-user-images.githubusercontent.com',
+  'camo.githubusercontent.com',
+  'raw.githubusercontent.com',
+  'codeload.github.com',
+  'release-assets.githubusercontent.com',
+  'media.githubusercontent.com',
+  'gist.github.com',
+  'gist.githubusercontent.com',
+  'objects.githubusercontent.com',
+  'collector.github.com',
+  'octocaptcha.com'
+];
+
+// 路径模式（/<密码>/<域名>/...）下需要把跳转拉回本代理的主机。
+// 只列页面和接口：登录后 302 去这里。对象存储、raw、codeload 不列，
+// 那些地址本来就该让浏览器直连，改写成代理等于让大文件走 Worker。
+const PAGE_REDIRECT_HOSTS = new Set([
+  'github.com',
+  'gist.github.com',
+  'api.github.com',
+  'github.githubassets.com'
+]);
 
 // RESTRICT_PATHS: 控制是否限制 GitHub 和 Docker 请求的路径。
 const RESTRICT_PATHS = false;
@@ -1445,6 +1485,10 @@ async function handleRequest1js(request, redirectCount = 0) {
 
   const newRequestHeaders = new Headers(request.headers);
   newRequestHeaders.set('Host', targetDomain);
+  // Origin 是浏览器按本站域名填的，目标站做写操作校验时会拿它对不上，换成源站
+  if (newRequestHeaders.has('Origin')) {
+    newRequestHeaders.set('Origin', `https://${targetDomain}`);
+  }
   newRequestHeaders.delete('x-amz-content-sha256');
   newRequestHeaders.delete('x-amz-date');
   newRequestHeaders.delete('x-amz-security-token');
@@ -1586,12 +1630,36 @@ async function handleRequest1js(request, redirectCount = 0) {
 
     // 复制响应并添加 CORS 头
     const newResponse = new Response(response.body, response);
-    newResponse.headers.set('Access-Control-Allow-Origin', '*');
-    newResponse.headers.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS');
+    // 路径模式的会话（登录后的 user_session 等）同样要能落在本代理域上
+    rewriteSetCookie(newResponse.headers);
+    // * 和 allow-credentials 不能并存，有 Origin 就回显，没有才给 *
+    const requestOrigin = request.headers.get('Origin');
+    if (requestOrigin) {
+      newResponse.headers.set('Access-Control-Allow-Origin', requestOrigin);
+      newResponse.headers.set('Access-Control-Allow-Credentials', 'true');
+      newResponse.headers.append('Vary', 'Origin');
+    } else {
+      newResponse.headers.set('Access-Control-Allow-Origin', '*');
+    }
+    newResponse.headers.set(
+      'Access-Control-Allow-Methods',
+      'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS'
+    );
     if (isDockerRequest) {
       newResponse.headers.set('Docker-Distribution-API-Version', 'registry/2.0');
       // 删除可能存在的重定向头，确保所有请求都通过Worker处理
       newResponse.headers.delete('Location');
+    } else if (response.status >= 300 && response.status < 400) {
+      // 站点内的跳转改回本代理前缀，否则登录完那一步会把人弹回真站；
+      // 对象存储 / CDN 的直链保持原样 —— 那是故意让客户端直连的。
+      const location = response.headers.get('Location');
+      const passwordSegment = url.pathname.split('/').filter(Boolean)[0] || '';
+      if (location) {
+        newResponse.headers.set(
+          'Location',
+          rewritePathLocation(location, url.origin, passwordSegment)
+        );
+      }
     }
     return newResponse;
   } catch (error) {
@@ -1600,9 +1668,6 @@ async function handleRequest1js(request, redirectCount = 0) {
   }
 }
 
-
-// 需要重定向的路径
-const redirect_paths = ['/login', '/signup', '/copilot', '/search/custom_scopes', '/session'];
 
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request, event));
@@ -2235,12 +2300,8 @@ async function handleRequest(request, ctx) {
     return handleRequest1js(request);
   }
 
-  // 对于 -proxy. 后缀的域名，即使路径是根路径，也应该进入 GitHub 网站
-  
-  // 检查特殊路径，返回正常错误
-  if (redirect_paths.includes(url.pathname)) {
-    return new Response('Not Found', { status: 404 });
-  }
+  // 对于 -proxy. 后缀的域名，路径原样交给目标站，包括 /login、/signup、/session —— 
+  // 这几个是登录注册链路，以前在这里被拦成 404，现在不再拦。
 
   // 强制使用 HTTPS
   if (url.protocol === 'http:') {
@@ -2291,32 +2352,64 @@ async function handleRequest(request, ctx) {
   const new_headers = new Headers(request.headers);
   new_headers.set('Host', target_host);
   new_headers.set('Referer', new_url.href);
-  
+  // 浏览器发来的 Origin 是本站代理域，写操作（登录、改设置、发表单）时目标站会拿它对不上
+  if (new_headers.has('Origin')) new_headers.set('Origin', `https://${target_host}`);
+
   try {
-    // 发起请求
+    // 用 manual：不能让 fetch 自己跟随跳转。跟随的话中间那次 302 上的 Set-Cookie 会被丢掉，
+    // 而 GitHub 登录成功后的 user_session 恰好就下发在 302 上，等于永远登不进去。
     const response = await fetch(new_url.href, {
       method: request.method,
       headers: new_headers,
-      body: request.method !== 'GET' ? request.body : undefined
+      body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
+      redirect: 'manual'
     });
 
-    // 克隆响应以便处理内容
-    const response_clone = response.clone();
-    
     // 设置新的响应头
     const new_response_headers = new Headers(response.headers);
-    new_response_headers.set('access-control-allow-origin', '*');
+    // 跨子域共享：sso.xxx 登录、www.xxx 使用这类站点，cookie 必须对整个 *.后缀 生效
+    rewriteSetCookie(new_response_headers, `.${getProxySuffix(effective_host)}`);
+    // CORS：* 和 allow-credentials 不能并存（浏览器会整体拒绝），所以回显来源
+    const request_origin = request.headers.get('Origin');
+    if (request_origin) {
+      new_response_headers.set('access-control-allow-origin', request_origin);
+      new_response_headers.append('Vary', 'Origin');
+    } else {
+      new_response_headers.delete('access-control-allow-origin');
+    }
     new_response_headers.set('access-control-allow-credentials', 'true');
     new_response_headers.set(
       'cache-control',
-      cacheControlFor(response.headers.get('content-type'), pathname)
+      cacheControlFor(
+        response.headers.get('content-type'),
+        pathname,
+        new_response_headers.has('set-cookie')
+      )
     );
     new_response_headers.delete('content-security-policy');
     new_response_headers.delete('content-security-policy-report-only');
     new_response_headers.delete('clear-site-data');
-    
+    new_response_headers.delete('x-frame-options');
+    // 正文要改写时，长度和压缩编码都不能沿用上游的；不改写的类型（图片、字体、压缩包）保持原样
+    if (isRewritableContentType(response.headers.get('content-type'))) {
+      new_response_headers.delete('content-length');
+      new_response_headers.delete('content-encoding');
+    }
+
+    // 跳转：Location 指回本代理的子域，否则登录完成那一步会直接弹回真站
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('Location');
+      if (location) {
+        new_response_headers.set(
+          'Location',
+          rewriteLocation(location, host_prefix, effective_host, domain_mappings)
+        );
+      }
+      return new Response(null, { status: response.status, headers: new_response_headers });
+    }
+
     // 处理响应内容，替换域名引用，使用有效主机名来决定域名后缀
-    const modified_body = await modifyResponse(response_clone, host_prefix, effective_host, domain_mappings);
+    const modified_body = await modifyResponse(response, host_prefix, effective_host, domain_mappings);
 
     return new Response(modified_body, {
       status: response.status,
@@ -2353,52 +2446,123 @@ function getProxySuffix(host) {
   return h;
 }
 
+// 哪些响应类型要改写正文（域名替换）。判断逻辑两处共用，别写两份。
+function isRewritableContentType(contentType) {
+  const ct = (contentType || '').toLowerCase();
+  return (
+    ct.includes('text/') ||
+    ct.includes('application/json') ||
+    ct.includes('application/javascript') ||
+    ct.includes('application/xml')
+  );
+}
+
+// 正文替换用的一次性扫描：把页面里所有「//主机名」形式的地址扫一遍，命中映射表才改写。
+// 不用「每个域名一条正则」是因为白名单现在有十几个域名，逐个 replace 等于把整篇 HTML
+// 扫十几遍，大页面在免费 Worker 上会直接顶穿 CPU 限制。
+const BODY_URL_PATTERN = /(https?:)?\/\/([a-z0-9.-]+)(?=[/"'?#\s<>]|$)/gi;
+
 async function modifyResponse(response, host_prefix, effective_hostname, domain_mappings) {
-  // 只处理文本内容
   const content_type = response.headers.get('content-type') || '';
-  if (!content_type.includes('text/') && !content_type.includes('application/json') && 
-      !content_type.includes('application/javascript') && !content_type.includes('application/xml')) {
+  if (!isRewritableContentType(content_type)) {
     return response.body;
   }
 
-  let text = await response.text();
-  
-  // 使用有效主机名获取域名后缀部分（用于构建完整的代理域名）
+  const text = await response.text();
   const domain_suffix = effective_hostname.substring(host_prefix.length);
-  
-  // 替换所有域名引用
-  for (const [original_domain, mapped_prefix] of Object.entries(domain_mappings)) {
-    const escaped_domain = original_domain.replace(/\./g, '\\.');
-    
-    const current_prefix = mapped_prefix + '-proxy.';
-    const full_proxy_domain = `${current_prefix}${domain_suffix}`;
-    
-    // 替换完整URLs
-    text = text.replace(
-      new RegExp(`https?://${escaped_domain}(?=/|"|'|\\s|$)`, 'g'),
-      `https://${full_proxy_domain}`
-    );
-    
-    // 替换协议相对URLs
-    text = text.replace(
-      new RegExp(`//${escaped_domain}(?=/|"|'|\\s|$)`, 'g'),
-      `//${full_proxy_domain}`
-    );
+
+  return text.replace(BODY_URL_PATTERN, (match, scheme, host) => {
+    const mapped = domain_mappings[String(host).toLowerCase()];
+    if (!mapped) return match;
+    return `${scheme || ''}//${mapped}-proxy.${domain_suffix}`;
+  });
+}
+
+// 把上游下发的 Set-Cookie 改成能在代理主机上生效的版本。
+// 上游的 Domain 一律不能留：浏览器认为这条属于 .github.com / .douyin.com，在代理域下直接丢弃，
+// 结果是登录提交成功了、会话却建不起来，下一步又回登录页。
+//
+// 改写规则按 cookie 本来的意图分两种：
+//   原本带 Domain 的 —— 它本来就是要跨子域共享（GitHub 的 .github.com、抖音 sso→www 的 .douyin.com），
+//                       换成 .代理后缀，让所有 *-proxy 子域都能拿到；不换的话 sso 登完回 www 还是未登录。
+//   原本没有 Domain（host-only）—— 保持 host-only，不往外扩散。
+// 传了 cookieDomain 才做跨子域，路径模式只在一个主机上用，保持 host-only。
+function rewriteSetCookie(headers, cookieDomain) {
+  let cookies = [];
+  if (typeof headers.getSetCookie === 'function') {
+    cookies = headers.getSetCookie() || [];
   }
+  // 老运行时没有 getSetCookie，退回 getAll；再不行只能取单值（会丢掉同名多值的情况）
+  if (!cookies.length && typeof headers.getAll === 'function') {
+    try {
+      cookies = headers.getAll('set-cookie') || [];
+    } catch {
+      cookies = [];
+    }
+  }
+  if (!cookies.length) {
+    const single = headers.get('set-cookie');
+    if (!single) return;
+    cookies = [single];
+  }
+  headers.delete('set-cookie');
+  for (const cookie of cookies) {
+    const hadDomain = /;\s*domain=/i.test(cookie);
+    const name = cookie.split('=')[0].trim();
+    let next = cookie.replace(/;\s*domain=[^;]*/gi, '');
+    // __Host- 前缀按规范不许带 Domain，带了整条会被浏览器拒收
+    if (hadDomain && cookieDomain && !name.startsWith('__Host-')) {
+      next += `; Domain=${cookieDomain}`;
+    }
+    if (!/;\s*path=/i.test(next)) next += '; Path=/';
+    headers.append('set-cookie', next);
+  }
+}
 
+// 把上游的绝对跳转地址改写回代理子域；不在映射表里的（CDN、第三方）原样返回。
+function rewriteLocation(location, host_prefix, effective_hostname, domain_mappings) {
+  if (!location) return location;
+  if (location.startsWith('/')) return location;
+  try {
+    const target = new URL(location);
+    const mapped = domain_mappings[target.hostname.toLowerCase()];
+    if (!mapped) return location;
+    target.protocol = 'https:';
+    target.hostname = `${mapped}-proxy.${effective_hostname.substring(host_prefix.length)}`;
+    return target.href;
+  } catch {
+    return location;
+  }
+}
 
-  return text;
+// 路径模式下的跳转改写：https://github.com/xxx -> https://本站/<密码>/github.com/xxx
+function rewritePathLocation(location, proxy_origin, password) {
+  if (!location || location.startsWith('/')) return location;
+  try {
+    const target = new URL(location);
+    const host = target.hostname.toLowerCase();
+    if (!PAGE_REDIRECT_HOSTS.has(host)) return location;
+    return `${proxy_origin}/${password}/${host}${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return location;
+  }
 }
 
 // 按响应类型分级设置浏览器缓存。
 // 重点在带指纹的静态资源：之前这里被统一压成 4 小时，
 // 等于把上游本来一年有效的缓存反复作废，回访时又全部重新找 Worker 要一遍。
-function cacheControlFor(contentType, pathname) {
+function cacheControlFor(contentType, pathname, hasSetCookie) {
   const ct = (contentType || '').toLowerCase();
 
-  // 页面短缓存：GitHub 的 HTML 里带动态 token，不能长留
+  // 带 Set-Cookie 的响应一律不缓存：它是「这台浏览器的会话刚刚变了」的信号
+  if (hasSetCookie) {
+    return 'no-store';
+  }
+
+  // 页面不缓存。GitHub 的 HTML 里带 authenticity_token 和当前登录态，
+  // 缓存下来会拿到过期的表单 token，登录直接失败。
   if (ct.includes('text/html') || ct.includes('application/xhtml')) {
-    return HTML_CACHE;
+    return 'no-store';
   }
   if (ct.includes('json')) {
     return JSON_CACHE;
